@@ -8,7 +8,7 @@ class Config:
     def __init__(self, base_dir):
         self.base_dir = base_dir
         self.config = configparser.ConfigParser()
-        self.config_path = os.path.join(self.base_dir, "config.ini")
+        self.config_path = os.path.join(self.base_dir, "modules", "config", "config.ini")
         self._load_config()
 
     def _load_config(self):
@@ -94,6 +94,18 @@ class Config:
             "subject": "Test Subject",
             "body_html_file": "email_template.html",
             "attachment_dir": "attachments"
+        }
+        self.config["EMAIL_PERSONALIZATION"] = {
+            "enable_personalization": "false",
+            "recipient_name": "email_extraction",
+            "sender_name": "static:[SENDER_NAME]",
+            "sender_title": "static:[SENDER_TITLE]",
+            "company_name": "database_column:company_name",
+            "current_date": "dynamic:current_date",
+            "current_year": "dynamic:current_year"
+        }
+        self.config["EMAIL_ATTACHMENTS"] = {
+            "resume_attachment": "attachments/resume.jpg:resume_image"
         }
         with open(self.config_path, "w") as configfile:
             self.config.write(configfile)
@@ -211,6 +223,29 @@ class Config:
             "sender_strategy": self.get("APPLICATION", "sender_strategy")
         }
 
+    def get_queue_management_settings(self):
+        """Returns queue management settings with auto-calculated batch size."""
+        max_queue_size = self.getint("QUEUE_MANAGEMENT", "max_queue_size_per_sender", fallback=30)
+        num_senders = len(self.get_senders())
+
+        # Auto-calculate batch size or allow manual override
+        batch_size_config = self.get("QUEUE_MANAGEMENT", "batch_processing_size", fallback="auto")
+        if batch_size_config == "auto":
+            batch_size = max_queue_size * num_senders
+        else:
+            batch_size = int(batch_size_config)
+
+        return {
+            "max_queue_size_per_sender": max_queue_size,
+            "batch_processing_size": batch_size,
+            "refill_threshold": self.getint("QUEUE_MANAGEMENT", "refill_threshold", fallback=10),
+            "queue_calculation_method": self.get("QUEUE_MANAGEMENT", "queue_calculation_method", fallback="smart"),
+            "overflow_strategy": self.get("QUEUE_MANAGEMENT", "overflow_strategy", fallback="wait_shortest"),
+            "enable_queue_balancing": self.getboolean("QUEUE_MANAGEMENT", "enable_queue_balancing", fallback=True),
+            "queue_balance_interval": self.getint("QUEUE_MANAGEMENT", "queue_balance_interval", fallback=30),
+            "max_wait_time_threshold": self.getint("QUEUE_MANAGEMENT", "max_wait_time_threshold", fallback=300)
+        }
+
     def get_email_content_settings(self):
         return {
             "subject": self.get("EMAIL_CONTENT", "subject"),
@@ -266,6 +301,52 @@ class Config:
             return {}
         
         return filters
+
+    def get_email_personalization_settings(self):
+        """Get email personalization configuration."""
+        settings = {
+            "enable_personalization": self.get("EMAIL_PERSONALIZATION", "enable_personalization", fallback="true").lower() == "true",
+            "personalization_mappings": {}
+        }
+
+        # Load all personalization mappings from config
+        if self.config.has_section("EMAIL_PERSONALIZATION"):
+            for key, value in self.config.items("EMAIL_PERSONALIZATION"):
+                if key != "enable_personalization":
+                    settings["personalization_mappings"][key] = value
+
+        return settings
+
+    def get_email_attachments_settings(self):
+        """Get email attachments configuration with CID mappings."""
+        settings = {
+            "attachments": {}
+        }
+
+        # Load all attachment mappings from config
+        if self.config.has_section("EMAIL_ATTACHMENTS"):
+            for key, value in self.config.items("EMAIL_ATTACHMENTS"):
+                try:
+                    # Parse format: file_path:content_id
+                    if ':' in value:
+                        file_path, content_id = value.split(':', 1)
+
+                        # Convert relative paths to absolute
+                        if not os.path.isabs(file_path):
+                            file_path = os.path.join(self.base_dir, file_path)
+
+                        settings["attachments"][key] = {
+                            "file_path": file_path,
+                            "content_id": content_id
+                        }
+                    else:
+                        # Invalid format, skip with warning
+                        print(f"Warning: Invalid attachment format for '{key}': {value}")
+
+                except Exception as e:
+                    print(f"Warning: Error parsing attachment '{key}': {e}")
+
+        return settings
 
     def get_recipients_file(self):
         return self.get("RECIPIENTS", "recipients_path")

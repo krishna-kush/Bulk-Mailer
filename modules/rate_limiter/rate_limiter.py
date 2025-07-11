@@ -37,71 +37,108 @@ class RateLimiter:
         return rate_limits
     
     def can_send(self, sender_email):
-        """Check if we can send an email with the given sender."""
+        """Check if we can send an email with the given sender (including gap control)."""
+        # First check basic rate limits
+        if not self.can_send_ignoring_gap(sender_email):
+            return False
+
+        # Then check gap control
+        return self.is_gap_satisfied(sender_email)
+
+    def can_send_ignoring_gap(self, sender_email):
+        """Check if we can send an email with the given sender (ignoring gap control)."""
         # Check global limit first
         if self.global_limit > 0 and self.global_sent_count >= self.global_limit:
             if self.logger:
                 self.logger.warning(f"Global limit reached ({self.global_limit} emails). Cannot send more emails.")
             return False
-        
+
         if sender_email not in self.rate_limits:
             return True
-            
+
         limits = self.rate_limits[sender_email]
-        
+
         # Check total limit per run
         if limits['total_limit_per_run'] > 0:
             if self.sent_counts[sender_email] >= limits['total_limit_per_run']:
                 if self.logger:
                     self.logger.warning(f"Sender '{sender_email}' has reached total limit per run ({limits['total_limit_per_run']})")
                 return False
-        
+
         # Check per minute limit
         if limits['limit_per_min'] > 0:
             now = datetime.now()
             minute_ago = now - timedelta(minutes=1)
-            
+
             # Remove old timestamps
             timestamps = self.sent_timestamps[sender_email]
             while timestamps and datetime.fromtimestamp(timestamps[0]) < minute_ago:
                 timestamps.popleft()
-            
+
             if len(timestamps) >= limits['limit_per_min']:
                 if self.logger:
                     self.logger.warning(f"Sender '{sender_email}' has reached per minute limit ({limits['limit_per_min']})")
                 return False
-        
+
         # Check per hour limit
         if limits['limit_per_hour'] > 0:
             now = datetime.now()
             hour_ago = now - timedelta(hours=1)
-            
+
             # Count emails sent in the last hour
             timestamps = self.sent_timestamps[sender_email]
             emails_last_hour = sum(1 for ts in timestamps if datetime.fromtimestamp(ts) >= hour_ago)
-            
+
             if emails_last_hour >= limits['limit_per_hour']:
                 if self.logger:
                     self.logger.warning(f"Sender '{sender_email}' has reached per hour limit ({limits['limit_per_hour']})")
                 return False
-        
+
         return True
+
+    def is_gap_satisfied(self, sender_email, current_time=None):
+        """Check if the gap period has been satisfied for a sender."""
+        if current_time is None:
+            current_time = time.time()
+
+        if sender_email not in self.rate_limits:
+            return True
+
+        limits = self.rate_limits[sender_email]
+        per_run_gap = limits['per_run_gap']
+
+        if per_run_gap > 0:
+            time_since_last = current_time - self.last_sent_time[sender_email]
+            return time_since_last >= per_run_gap
+
+        return True
+
+    def get_gap_wait_time(self, sender_email, current_time=None):
+        """Get the remaining wait time for a sender's gap period."""
+        if current_time is None:
+            current_time = time.time()
+
+        if sender_email not in self.rate_limits:
+            return 0.0
+
+        limits = self.rate_limits[sender_email]
+        per_run_gap = limits['per_run_gap']
+
+        if per_run_gap > 0:
+            time_since_last = current_time - self.last_sent_time[sender_email]
+            if time_since_last < per_run_gap:
+                return per_run_gap - time_since_last
+
+        return 0.0
     
     def wait_if_needed(self, sender_email):
         """Wait if needed based on the gap settings for the sender."""
-        if sender_email not in self.rate_limits:
-            return
-            
-        limits = self.rate_limits[sender_email]
-        per_run_gap = limits['per_run_gap']
-        
-        if per_run_gap > 0:
-            time_since_last = time.time() - self.last_sent_time[sender_email]
-            if time_since_last < per_run_gap:
-                wait_time = per_run_gap - time_since_last
-                if self.logger:
-                    self.logger.debug(f"Sender '{sender_email}' gap control: waiting {wait_time:.2f} seconds")
-                time.sleep(wait_time)
+        wait_time = self.get_gap_wait_time(sender_email)
+
+        if wait_time > 0:
+            if self.logger:
+                self.logger.debug(f"Sender '{sender_email}' gap control: waiting {wait_time:.2f} seconds")
+            time.sleep(wait_time)
     
     def record_sent(self, sender_email):
         """Record that an email was sent using the specified sender."""

@@ -1,6 +1,7 @@
 import os
 import csv
 import sqlite3
+import threading
 from typing import List, Dict, Optional, Tuple
 
 
@@ -11,7 +12,8 @@ class RecipientManager:
         self.config = config_settings
         self.base_dir = base_dir
         self.logger = logger
-        self.db_connection = None
+        self.local_data = threading.local()  # Thread-local storage for database connections
+        self.db_path = None
         
         # Validate configuration
         self._validate_config()
@@ -46,11 +48,15 @@ class RecipientManager:
             if not os.path.exists(db_path):
                 raise FileNotFoundError(f"Database file not found: {db_path}")
             
-            self.db_connection = sqlite3.connect(db_path)
-            self.db_connection.row_factory = sqlite3.Row  # Enable column access by name
-            
+            # Store db_path for thread-local connections
+            self.db_path = db_path
+
+            # Test connection and verify table structure
+            connection = self._get_db_connection()
+            connection.row_factory = sqlite3.Row  # Enable column access by name
+
             # Check if table exists
-            cursor = self.db_connection.cursor()
+            cursor = connection.cursor()
             cursor.execute("""
                 SELECT name FROM sqlite_master 
                 WHERE type='table' AND name=?
@@ -75,13 +81,20 @@ class RecipientManager:
                     ALTER TABLE {self.config['db_table']} 
                     ADD COLUMN email_sent TEXT DEFAULT NULL
                 """)
-                self.db_connection.commit()
+                connection.commit()
                 self.logger.info(f"Added 'email_sent' column to table '{self.config['db_table']}'")
             
         except Exception as e:
             self.logger.error(f"Error initializing database: {e}")
             raise
-    
+
+    def _get_db_connection(self):
+        """Get thread-local database connection."""
+        if not hasattr(self.local_data, 'connection'):
+            self.local_data.connection = sqlite3.connect(self.db_path)
+            self.local_data.connection.row_factory = sqlite3.Row
+        return self.local_data.connection
+
     def get_recipients(self) -> List[Dict]:
         """Get list of recipients from configured source."""
         if self.config['recipients_from'] == 'csv':
@@ -126,7 +139,8 @@ class RecipientManager:
         recipients = []
         
         try:
-            cursor = self.db_connection.cursor()
+            connection = self._get_db_connection()
+            cursor = connection.cursor()
             
             # Build the base query
             query = f"""
@@ -202,14 +216,15 @@ class RecipientManager:
             return True
         
         try:
-            cursor = self.db_connection.cursor()
+            connection = self._get_db_connection()
+            cursor = connection.cursor()
             cursor.execute(f"""
-                UPDATE {self.config['db_table']} 
-                SET email_sent = ? 
+                UPDATE {self.config['db_table']}
+                SET email_sent = ?
                 WHERE {self.config['db_id_column']} = ?
             """, (status, recipient['row_id']))
-            
-            self.db_connection.commit()
+
+            connection.commit()
             
             if cursor.rowcount > 0:
                 self.logger.debug(f"Updated status for {recipient['email']} to '{status}'")
@@ -228,7 +243,8 @@ class RecipientManager:
             return {'message': 'Statistics only available for database source'}
         
         try:
-            cursor = self.db_connection.cursor()
+            connection = self._get_db_connection()
+            cursor = connection.cursor()
             
             # Get total count
             cursor.execute(f"""
@@ -271,9 +287,9 @@ class RecipientManager:
     
     def close(self):
         """Close database connection if open."""
-        if self.db_connection:
-            self.db_connection.close()
-            self.db_connection = None
+        if hasattr(self.local_data, 'connection'):
+            self.local_data.connection.close()
+            delattr(self.local_data, 'connection')
     
     def __del__(self):
         """Ensure database connection is closed when object is destroyed."""

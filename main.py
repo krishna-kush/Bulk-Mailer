@@ -1,22 +1,84 @@
 import os
 import csv
 import time
-from config import Config
-from logger import AppLogger
-from email_sender import EmailSender
-from sender_manager import SenderManager
-from email_composer import EmailComposer
-from rate_limiter import RateLimiter
-from sender_failure_tracker import SenderFailureTracker
-from email_retry_handler import EmailRetryHandler
-from recipient_manager import RecipientManager
-from utils import extract_name_from_email
+import threading
+from modules.config.config import Config
+from modules.logger.logger import AppLogger
+from modules.mailer.email_sender import EmailSender
+from modules.sender.sender_manager import SenderManager
+from modules.mailer.email_composer import EmailComposer
+from modules.rate_limiter.rate_limiter import RateLimiter
+from modules.sender.sender_failure_tracker import SenderFailureTracker
+from modules.retry.email_retry_handler import EmailRetryHandler
+from modules.recipient.recipient_manager import RecipientManager
+from modules.queue.smart_queue_manager import SmartQueueManager
+from modules.queue.queue_worker import QueueWorker
+from modules.core.email_task import EmailTask
+from modules.core.utils import extract_name_from_email
+from modules.scheduler.batch_scheduler import BatchScheduler
 
 # BASE_DIR is now handled by the Config class
 
+def process_queued_emails(queue_manager, email_sender, rate_limiter, failure_tracker, logger):
+    """
+    Process emails from all sender queues concurrently using QueueWorker.
+
+    Returns:
+        Number of successfully sent emails
+    """
+    # Create worker threads for each sender
+    workers = []
+    threads = []
+
+    for sender_info in queue_manager.senders:
+        worker = QueueWorker(
+            sender_info=sender_info,
+            queue_manager=queue_manager,
+            email_sender=email_sender,
+            rate_limiter=rate_limiter,
+            failure_tracker=failure_tracker,
+            logger=logger
+        )
+        workers.append(worker)
+
+        # Start worker thread
+        thread = threading.Thread(target=worker.run, daemon=True)
+        thread.start()
+        threads.append(thread)
+
+    # Wait for all workers to complete
+    for thread in threads:
+        thread.join()
+
+    # Collect results from all workers
+    total_successful = sum(worker.emails_succeeded for worker in workers)
+    total_failed = sum(worker.emails_failed for worker in workers)
+
+    # Perform queue rebalancing if needed
+    if queue_manager.should_rebalance_queues():
+        moved_count = queue_manager.rebalance_queues()
+        if moved_count > 0:
+            logger.info(f"Rebalanced queues: moved {moved_count} emails")
+
+    # Clean up expired emails
+    expired_count = queue_manager.cleanup_expired_emails()
+    if expired_count > 0:
+        logger.warning(f"Cleaned up {expired_count} expired emails")
+
+    # Log worker statistics
+    logger.info("Worker Statistics:")
+    for worker in workers:
+        stats = worker.get_stats()
+        logger.info(f"  {stats['sender_email']}: {stats['emails_succeeded']} sent, "
+                   f"{stats['emails_failed']} failed, {stats['success_rate']:.1f}% success rate")
+
+    return total_successful
+
 def main():
-    config = Config(os.path.dirname(os.path.abspath(__file__)))
-    app_logger = AppLogger(config.base_dir, config_path=os.path.join(config.base_dir, "config.ini"))
+    # Use the directory where main.py is located (the mail directory)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    config = Config(base_dir)
+    app_logger = AppLogger(config.base_dir, config_path=config.config_path)
     logger = app_logger.get_logger()
 
     smtp_configs = config.get_smtp_configs()
@@ -28,13 +90,16 @@ def main():
     fallback_settings = config.get_fallback_settings()
     email_content_settings = config.get_email_content_settings()
     recipients_settings = config.get_recipients_settings()
+    queue_management_settings = config.get_queue_management_settings()
+    personalization_settings = config.get_email_personalization_settings()
+    attachments_settings = config.get_email_attachments_settings()
 
     email_sender = EmailSender(smtp_configs, logger)
     sender_manager = SenderManager(
         senders_data,
         app_settings["sender_strategy"]
     )
-    email_composer = EmailComposer(logger)
+    email_composer = EmailComposer(logger, personalization_settings, config.base_dir)
     rate_limiter = RateLimiter(senders_data, rate_limiter_settings["global_limit"], logger)
     failure_tracker = SenderFailureTracker(failure_tracking_settings, logger)
     retry_handler = EmailRetryHandler(retry_settings, logger)
@@ -71,7 +136,7 @@ def main():
     else:
         logger.warning(f"Email HTML template not found: {body_html_path}. Using empty HTML body.")
 
-    # Get attachments
+    # Get regular attachments
     attachment_dir = os.path.join(config.base_dir, email_content_settings["attachment_dir"])
     attachments = []
     if os.path.exists(attachment_dir) and os.path.isdir(attachment_dir):
@@ -79,110 +144,132 @@ def main():
             attachments.append(os.path.join(attachment_dir, f_name))
     logger.info(f"Found {len(attachments)} attachments in {attachment_dir}.")
 
+    # Get CID attachments (inline attachments)
+    cid_attachments = {}
+    for attachment_name, attachment_config in attachments_settings["attachments"].items():
+        file_path = attachment_config["file_path"]
+        content_id = attachment_config["content_id"]
+
+        if os.path.exists(file_path):
+            cid_attachments[content_id] = file_path
+            logger.debug(f"CID attachment configured: {content_id} -> {file_path}")
+        else:
+            logger.warning(f"CID attachment file not found: {file_path}")
+
+    logger.info(f"Configured {len(cid_attachments)} CID attachments for inline embedding.")
+
     # Sending logic
     successful_sends = 0
     failed_sends = 0
     
     if app_settings["sender_strategy"] == "rotate_email":
-        logger.info("Starting rotate_email strategy with fallback support")
-        
-        for recipient in recipients:
-            # Check if global limit has been reached
-            if rate_limiter.is_global_limit_reached():
-                logger.info("Global email limit reached. Stopping email processing.")
-                break
-                
-            recipient_email = recipient['email']
-            logger.info(f"Processing recipient: {recipient_email}")
-            
-            # Personalize the email template for this recipient
-            recipient_name = extract_name_from_email(recipient_email)
-            personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
-            
-            if fallback_settings["enable_fallback"]:
-                # Use fallback mechanism - try multiple senders if needed
-                available_senders = [s for s in senders_data]  # Get all available senders
-                
-                result = retry_handler.attempt_send_with_fallbacks(
-                    email_sender=email_sender,
-                    available_senders=available_senders,
-                    recipient_email=recipient_email,
-                    subject=email_content_settings["subject"],
-                    body_html=personalized_body_html,
-                    attachments=attachments,
-                    rate_limiter=rate_limiter,
-                    failure_tracker=failure_tracker,
-                    max_fallback_attempts=fallback_settings["max_fallback_attempts"]
-                )
-                
-                if result['success']:
-                    successful_sends += 1
-                    # Record with sender manager for rotation
-                    sender_manager.record_sent(result['successful_sender'])
-                    # Update recipient status in database
-                    recipient_manager.update_recipient_status(recipient, 'sent')
-                    logger.info(f"✓ Email sent to {recipient_email} using {result['successful_sender']} "
-                               f"(attempts: {result['total_attempts']})")
-                else:
-                    failed_sends += 1
-                    # Update recipient status in database
-                    recipient_manager.update_recipient_status(recipient, 'error')
-                    logger.error(f"✗ Failed to send email to {recipient_email} after trying "
-                               f"{len(result['failed_senders'])} senders "
-                               f"({result['total_attempts']} total attempts)")
-            else:
-                # Original rotate_email without fallback
-                sender = sender_manager.get_next_sender()
-                if not sender:
-                    logger.error("No available senders left. Stopping email sending.")
+        logger.info("Starting rotate_email strategy with smart queue-based concurrent processing")
+
+        # Initialize the smart queue manager
+        queue_manager = SmartQueueManager(
+            senders=senders_data,
+            queue_settings=queue_management_settings,
+            rate_limiter=rate_limiter,
+            failure_tracker=failure_tracker,
+            logger=logger
+        )
+
+        # Process emails in batches using the queue system
+        batch_size = queue_management_settings['batch_processing_size']
+        processed_count = 0
+
+        logger.info(f"Queue system initialized - batch size: {batch_size}, max queue per sender: {queue_management_settings['max_queue_size_per_sender']}")
+
+        while processed_count < len(recipients):
+            # Load next batch of recipients
+            batch_end = min(processed_count + batch_size, len(recipients))
+            current_batch = recipients[processed_count:batch_end]
+
+            logger.info(f"Processing batch {processed_count//batch_size + 1}: "
+                       f"emails {processed_count + 1}-{batch_end} of {len(recipients)}")
+
+            # Create email tasks and queue them
+            queued_in_batch = 0
+            for recipient in current_batch:
+                # Check if global limit has been reached
+                if rate_limiter.is_global_limit_reached():
+                    logger.info("Global email limit reached. Stopping email processing.")
                     break
 
-                sender_email = sender["email"]
-                
-                # Check if sender is blocked
-                if failure_tracker.is_sender_blocked(sender_email):
-                    logger.warning(f"Assigned sender '{sender_email}' is blocked. Skipping {recipient_email}")
-                    failed_sends += 1
-                    # Update recipient status in database
-                    recipient_manager.update_recipient_status(recipient, 'error')
-                    continue
+                recipient_email = recipient['email']
 
-                # Check rate limits
-                if not rate_limiter.can_send(sender_email):
-                    logger.warning(f"Rate limit reached for sender '{sender_email}'. Skipping {recipient_email}")
-                    failed_sends += 1
-                    # Update recipient status in database
-                    recipient_manager.update_recipient_status(recipient, 'error')
-                    continue
-
-                # Attempt send with retries for single sender
-                rate_limiter.wait_if_needed(sender_email)
-                
-                result = retry_handler.attempt_send_with_retries(
-                    email_sender=email_sender,
-                    sender_info=sender,
-                    recipient_email=recipient_email,
-                    subject=email_content_settings["subject"],
-                    body_html=personalized_body_html,
-                    attachments=attachments
-                )
-                
-                if result['success']:
-                    successful_sends += 1
-                    sender_manager.record_sent(sender_email)
-                    rate_limiter.record_sent(sender_email)
-                    failure_tracker.record_success(sender_email)
-                    # Update recipient status in database
-                    recipient_manager.update_recipient_status(recipient, 'sent')
-                    logger.info(f"✓ Email sent to {recipient_email} using {sender_email} "
-                               f"(attempts: {result['attempts']})")
+                # Personalize the email using the new personalization system
+                if personalization_settings["enable_personalization"]:
+                    try:
+                        personalized_body_html = email_composer.personalizer.personalize_email(
+                            body_html, recipient
+                        )
+                        personalized_subject = email_composer.personalizer.personalize_email(
+                            email_content_settings["subject"], recipient
+                        )
+                        logger.debug(f"Personalized email for {recipient_email}")
+                    except Exception as e:
+                        logger.warning(f"Personalization failed for {recipient_email}: {e}")
+                        # Fallback to legacy personalization
+                        recipient_name = extract_name_from_email(recipient_email)
+                        personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
+                        personalized_subject = email_content_settings["subject"]
                 else:
+                    # Legacy personalization
+                    recipient_name = extract_name_from_email(recipient_email)
+                    personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
+                    personalized_subject = email_content_settings["subject"]
+
+                # Create email task
+                email_task = EmailTask(
+                    recipient_data=recipient,
+                    subject=personalized_subject,
+                    body_html=personalized_body_html,
+                    attachments=attachments,
+                    cid_attachments=cid_attachments,
+                    max_attempts=fallback_settings["max_fallback_attempts"]
+                )
+
+                # Set total available senders for retry logic
+                email_task.set_total_available_senders(len(senders_data))
+
+                # Queue the email task
+                if queue_manager.queue_email(email_task):
+                    queued_in_batch += 1
+                    logger.debug(f"Queued email for {recipient_email}")
+                else:
+                    logger.error(f"Failed to queue email for {recipient_email}")
                     failed_sends += 1
-                    failure_tracker.record_failure(sender_email, result['last_error'])
-                    # Update recipient status in database
                     recipient_manager.update_recipient_status(recipient, 'error')
-                    logger.error(f"✗ Failed to send email to {recipient_email} using {sender_email} "
-                               f"after {result['attempts']} attempts. Error: {result['last_error']}")
+
+            logger.info(f"Queued {queued_in_batch} emails in current batch")
+
+            # Process queued emails concurrently
+            batch_successful = process_queued_emails(
+                queue_manager=queue_manager,
+                email_sender=email_sender,
+                rate_limiter=rate_limiter,
+                failure_tracker=failure_tracker,
+                logger=logger
+            )
+
+            successful_sends += batch_successful
+            logger.info(f"Batch completed: {batch_successful} emails sent successfully")
+
+            processed_count = batch_end
+
+            # Check if we should stop due to global limit
+            if rate_limiter.is_global_limit_reached():
+                logger.info("Global email limit reached. Stopping batch processing.")
+                break
+
+        # Get final statistics
+        queue_stats = queue_manager.get_queue_stats()
+        logger.info(f"Queue processing completed. Final stats: {queue_stats}")
+
+        # Calculate failed sends from remaining queued emails
+        for sender_email, queue_stat in queue_stats['sender_queues'].items():
+            failed_sends += queue_stat['queue_size']  # Remaining emails in queues
 
     elif app_settings["sender_strategy"] == "duplicate_send":
         logger.info("Starting duplicate_send strategy with retry support")
@@ -197,10 +284,28 @@ def main():
             recipient_success = False
             senders_used = 0
             
-            # Personalize the email template for this recipient
-            recipient_name = extract_name_from_email(recipient)
-            personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
-            
+            # Personalize the email using the new personalization system
+            recipient_data = {'email': recipient}  # Create recipient data dict for fallback
+            if personalization_settings["enable_personalization"]:
+                try:
+                    personalized_body_html = email_composer.personalizer.personalize_email(
+                        body_html, recipient_data
+                    )
+                    personalized_subject = email_composer.personalizer.personalize_email(
+                        email_content_settings["subject"], recipient_data
+                    )
+                except Exception as e:
+                    logger.warning(f"Personalization failed for {recipient}: {e}")
+                    # Fallback to legacy personalization
+                    recipient_name = extract_name_from_email(recipient)
+                    personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
+                    personalized_subject = email_content_settings["subject"]
+            else:
+                # Legacy personalization
+                recipient_name = extract_name_from_email(recipient)
+                personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
+                personalized_subject = email_content_settings["subject"]
+
             for sender in senders_data:
                 # Check if global limit has been reached
                 if rate_limiter.is_global_limit_reached():
@@ -226,9 +331,10 @@ def main():
                     email_sender=email_sender,
                     sender_info=sender,
                     recipient_email=recipient,
-                    subject=email_content_settings["subject"],
+                    subject=personalized_subject,
                     body_html=personalized_body_html,
-                    attachments=attachments
+                    attachments=attachments,
+                    cid_attachments=cid_attachments
                 )
                 
                 senders_used += 1

@@ -13,9 +13,9 @@ class EmailRetryHandler:
                         f"retry_delay={retry_settings['retry_delay']}s, "
                         f"max_retries_per_recipient={retry_settings['max_retries_per_recipient']}")
 
-    def attempt_send_with_retries(self, email_sender, sender_info: Dict[str, Any], 
-                                 recipient_email: str, subject: str, body_html: str, 
-                                 attachments=None) -> Dict[str, Any]:
+    def attempt_send_with_retries(self, email_sender, sender_info: Dict[str, Any],
+                                 recipient_email: str, subject: str, body_html: str,
+                                 attachments=None, cid_attachments=None) -> Dict[str, Any]:
         """
         Attempt to send email with retries for a single sender.
         
@@ -53,6 +53,7 @@ class EmailRetryHandler:
                     subject=subject,
                     body_html=body_html,
                     attachments=attachments,
+                    cid_attachments=cid_attachments,
                     smtp_id=smtp_id
                 )
                 
@@ -109,33 +110,56 @@ class EmailRetryHandler:
         
         senders_tried = 0
         
+        # Sort senders by availability (gap-aware) for optimal selection
+        if rate_limiter:
+            import time
+            current_time = time.time()
+            # Sort by gap wait time (ascending) - prefer immediately available senders
+            available_senders = sorted(available_senders,
+                                     key=lambda s: rate_limiter.get_gap_wait_time(s["email"], current_time))
+
         for sender_info in available_senders:
             if senders_tried >= max_fallback_attempts:
                 self.logger.info(f"Reached max fallback attempts ({max_fallback_attempts}) for '{recipient_email}'")
                 break
-                
+
             if result['total_attempts'] >= max_recipient_retries:
                 self.logger.info(f"Reached max recipient retries ({max_recipient_retries}) for '{recipient_email}'")
                 break
-            
+
             sender_email = sender_info["email"]
-            
+
             # Check if sender is blocked
             if failure_tracker and failure_tracker.is_sender_blocked(sender_email):
                 self.logger.info(f"Skipping blocked sender '{sender_email}' for '{recipient_email}'")
                 continue
-            
-            # Check rate limits
-            if rate_limiter and not rate_limiter.can_send(sender_email):
+
+            # Check rate limits (excluding gap for now)
+            if rate_limiter and not rate_limiter.can_send_ignoring_gap(sender_email):
                 self.logger.info(f"Skipping rate-limited sender '{sender_email}' for '{recipient_email}'")
                 continue
-            
-            senders_tried += 1
-            
-            # Apply rate limiter gap
+
+            # Check if gap is satisfied, if not, wait only if this is our best option
             if rate_limiter:
-                rate_limiter.wait_if_needed(sender_email)
-            
+                wait_time = rate_limiter.get_gap_wait_time(sender_email)
+                if wait_time > 0:
+                    # Check if there are other immediately available senders
+                    has_immediate_alternative = any(
+                        rate_limiter.get_gap_wait_time(s["email"]) == 0
+                        and not (failure_tracker and failure_tracker.is_sender_blocked(s["email"]))
+                        and rate_limiter.can_send_ignoring_gap(s["email"])
+                        for s in available_senders[available_senders.index(sender_info)+1:]
+                    )
+
+                    if has_immediate_alternative:
+                        self.logger.debug(f"Skipping sender '{sender_email}' (gap: {wait_time:.1f}s) - better options available")
+                        continue
+                    else:
+                        self.logger.info(f"Waiting {wait_time:.2f}s for sender '{sender_email}' (best available option)")
+                        time.sleep(wait_time)
+
+            senders_tried += 1
+
             # Attempt send with retries for this sender
             send_result = self.attempt_send_with_retries(
                 email_sender=email_sender,
