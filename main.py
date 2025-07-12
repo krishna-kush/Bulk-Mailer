@@ -2,7 +2,7 @@ import os
 import csv
 import time
 import threading
-from modules.config.config_loader import ConfigLoader
+from config.config_loader import ConfigLoader
 from modules.logger.logger import AppLogger
 from modules.mailer.email_sender import EmailSender
 from modules.sender.sender_manager import SenderManager
@@ -19,7 +19,7 @@ from modules.scheduler.batch_scheduler import BatchScheduler
 
 # BASE_DIR is now handled by the Config class
 
-def process_queued_emails(queue_manager, email_sender, rate_limiter, failure_tracker, logger):
+def process_queued_emails(queue_manager, email_sender, rate_limiter, failure_tracker, logger, config=None):
     """
     Process emails from all sender queues concurrently using QueueWorker.
 
@@ -37,7 +37,8 @@ def process_queued_emails(queue_manager, email_sender, rate_limiter, failure_tra
             email_sender=email_sender,
             rate_limiter=rate_limiter,
             failure_tracker=failure_tracker,
-            logger=logger
+            logger=logger,
+            config=config
         )
         workers.append(worker)
 
@@ -250,7 +251,8 @@ def main():
                 email_sender=email_sender,
                 rate_limiter=rate_limiter,
                 failure_tracker=failure_tracker,
-                logger=logger
+                logger=logger,
+                config=config
             )
 
             successful_sends += batch_successful

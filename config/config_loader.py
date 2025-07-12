@@ -8,7 +8,7 @@ class ConfigLoader:
     def __init__(self, base_dir):
         self.base_dir = base_dir
         self.config = configparser.ConfigParser()
-        self.config_path = os.path.join(self.base_dir, "modules", "config", "config.ini")
+        self.config_path = os.path.join(self.base_dir, "config", "config.ini")
         self._load_config()
 
     def _load_config(self):

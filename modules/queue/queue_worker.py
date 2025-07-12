@@ -1,17 +1,17 @@
 import threading
 import time
 from typing import Dict, Any
-from modules.config.config_loader import ConfigLoader
+from config.config_loader import ConfigLoader
 from modules.recipient.recipient_manager import RecipientManager
 
 class QueueWorker:
     """Worker thread for processing emails from a sender's queue."""
     
-    def __init__(self, sender_info: Dict[str, Any], queue_manager, email_sender, 
-                 rate_limiter, failure_tracker, logger):
+    def __init__(self, sender_info: Dict[str, Any], queue_manager, email_sender,
+                 rate_limiter, failure_tracker, logger, config=None):
         """
         Initialize queue worker.
-        
+
         Args:
             sender_info: Sender configuration dictionary
             queue_manager: SmartQueueManager instance
@@ -19,6 +19,7 @@ class QueueWorker:
             rate_limiter: RateLimiter instance
             failure_tracker: SenderFailureTracker instance
             logger: Logger instance
+            config: ConfigLoader instance (optional, will create new if not provided)
         """
         self.sender_info = sender_info
         self.sender_email = sender_info['email']
@@ -27,7 +28,8 @@ class QueueWorker:
         self.rate_limiter = rate_limiter
         self.failure_tracker = failure_tracker
         self.logger = logger
-        
+        self.config = config
+
         # Thread-local recipient manager
         self.recipient_manager = None
         self._init_recipient_manager()
@@ -42,11 +44,14 @@ class QueueWorker:
     def _init_recipient_manager(self):
         """Initialize thread-local recipient manager."""
         try:
-            import os
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            config = ConfigLoader(base_dir)
-            recipients_settings = config.get_recipients_settings()
-            self.recipient_manager = RecipientManager(recipients_settings, config.base_dir, self.logger)
+            # Use passed config instance or create new one if not provided
+            if self.config is None:
+                import os
+                base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                self.config = ConfigLoader(base_dir)
+
+            recipients_settings = self.config.get_recipients_settings()
+            self.recipient_manager = RecipientManager(recipients_settings, self.config.base_dir, self.logger)
         except Exception as e:
             self.logger.error(f"Failed to initialize recipient manager for worker {self.sender_email}: {e}")
     
