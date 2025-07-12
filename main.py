@@ -2,7 +2,7 @@ import os
 import csv
 import time
 import threading
-from modules.config.config import Config
+from modules.config.config_loader import ConfigLoader
 from modules.logger.logger import AppLogger
 from modules.mailer.email_sender import EmailSender
 from modules.sender.sender_manager import SenderManager
@@ -77,7 +77,7 @@ def process_queued_emails(queue_manager, email_sender, rate_limiter, failure_tra
 def main():
     # Use the directory where main.py is located (the mail directory)
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    config = Config(base_dir)
+    config = ConfigLoader(base_dir)
     app_logger = AppLogger(config.base_dir, config_path=config.config_path)
     logger = app_logger.get_logger()
 

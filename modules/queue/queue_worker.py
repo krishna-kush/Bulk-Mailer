@@ -1,7 +1,7 @@
 import threading
 import time
 from typing import Dict, Any
-from modules.config.config import Config
+from modules.config.config_loader import ConfigLoader
 from modules.recipient.recipient_manager import RecipientManager
 
 class QueueWorker:
@@ -44,7 +44,7 @@ class QueueWorker:
         try:
             import os
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            config = Config(base_dir)
+            config = ConfigLoader(base_dir)
             recipients_settings = config.get_recipients_settings()
             self.recipient_manager = RecipientManager(recipients_settings, config.base_dir, self.logger)
         except Exception as e:

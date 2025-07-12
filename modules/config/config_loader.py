@@ -2,7 +2,7 @@
 import configparser
 import os
 
-class Config:
+class ConfigLoader:
     """Manages application configuration from config.ini."""
 
     def __init__(self, base_dir):
@@ -16,6 +16,9 @@ class Config:
             self._create_default_config()
         self.config.read(self.config_path)
 
+        # Validate essential settings after loading
+        self._validate_essential_settings()
+
     def _create_default_config(self):
         """Creates a default config.ini if it doesn't exist."""
         self.config["SMTP"] = {
@@ -23,28 +26,10 @@ class Config:
             "port": "587",
             "use_tls": "True"
         }
-        self.config["SMTP_CONFIGS"] = {
-            "gmail_host": "smtp.gmail.com",
-            "gmail_port": "587",
-            "gmail_use_tls": "True",
-            "outlook_host": "smtp.office365.com",
-            "outlook_port": "587",
-            "outlook_use_tls": "True",
-            "yahoo_host": "smtp.mail.yahoo.com",
-            "yahoo_port": "587",
-            "yahoo_use_tls": "True",
-            "custom_host": "smtp.example.com",
-            "custom_port": "587",
-            "custom_use_tls": "True"
-        }
-        self.config["SENDERS"] = {
-            "sender1_email": "sender1@example.com",
-            "sender1_password": "password123",
-            "sender1_smtp": "gmail",
-            "sender2_email": "sender2@example.com",
-            "sender2_password": "password456",
-            "sender2_smtp": "outlook"
-        }
+        # SMTP_CONFIGS section intentionally omitted - must be configured by user
+        # This ensures validation will catch missing SMTP configuration
+        # SENDERS section intentionally omitted - must be configured by user
+        # This ensures validation will catch missing sender configuration
         self.config["RATE_LIMITER"] = {
             "global_limit": "0"
         }
@@ -95,20 +80,98 @@ class Config:
             "body_html_file": "email_template.html",
             "attachment_dir": "attachments"
         }
-        self.config["EMAIL_PERSONALIZATION"] = {
-            "enable_personalization": "false",
-            "recipient_name": "email_extraction",
-            "sender_name": "static:[SENDER_NAME]",
-            "sender_title": "static:[SENDER_TITLE]",
-            "company_name": "database_column:company_name",
-            "current_date": "dynamic:current_date",
-            "current_year": "dynamic:current_year"
-        }
-        self.config["EMAIL_ATTACHMENTS"] = {
-            "resume_attachment": "attachments/resume.jpg:resume_image"
-        }
+        # EMAIL_PERSONALIZATION section intentionally omitted - optional feature
+        # Users can add this section if they want personalization
+        # EMAIL_ATTACHMENTS section intentionally omitted - optional feature
+        # Users can add this section if they want CID attachments
         with open(self.config_path, "w") as configfile:
             self.config.write(configfile)
+
+    def _validate_essential_settings(self):
+        """Validate essential settings and quit if missing critical configuration."""
+        errors = []
+
+        # Check for SENDERS section
+        if not self.config.has_section("SENDERS"):
+            errors.append("❌ SENDERS section is missing from config.ini")
+        else:
+            # Check if we have at least one sender configured
+            senders = self.get_senders()
+            if not senders:
+                errors.append("❌ No senders configured in SENDERS section")
+            else:
+                # Validate each sender has required fields
+                for i, sender in enumerate(senders, 1):
+                    if not sender.get('email'):
+                        errors.append(f"❌ Sender {i}: Missing email address")
+                    if not sender.get('password'):
+                        errors.append(f"❌ Sender {i}: Missing password")
+
+        # Check for SMTP_CONFIGS section (required for multiple SMTP providers)
+        if not self.config.has_section("SMTP_CONFIGS"):
+            errors.append("❌ SMTP_CONFIGS section is missing from config.ini")
+        else:
+            # Check if we have at least basic SMTP configurations
+            try:
+                smtp_configs = self.get_smtp_configs()
+                if not smtp_configs or len(smtp_configs) <= 1:  # Only default config
+                    errors.append("❌ No additional SMTP configurations found in SMTP_CONFIGS section")
+            except Exception as e:
+                errors.append(f"❌ Error reading SMTP_CONFIGS: {e}")
+                for smtp_id, smtp_config in smtp_configs.items():
+                    if not smtp_config.get('host'):
+                        errors.append(f"❌ SMTP '{smtp_id}': Missing host")
+                    if not smtp_config.get('port'):
+                        errors.append(f"❌ SMTP '{smtp_id}': Missing port")
+
+        # Check for EMAIL_CONTENT section
+        if not self.config.has_section("EMAIL_CONTENT"):
+            errors.append("❌ EMAIL_CONTENT section is missing from config.ini")
+        else:
+            subject = self.get("EMAIL_CONTENT", "subject")
+            if not subject:
+                errors.append("❌ EMAIL_CONTENT: Missing subject")
+
+            body_html_file = self.get("EMAIL_CONTENT", "body_html_file")
+            if not body_html_file:
+                errors.append("❌ EMAIL_CONTENT: Missing body_html_file")
+            else:
+                # Check if template file exists
+                template_path = os.path.join(self.base_dir, body_html_file)
+                if not os.path.exists(template_path):
+                    errors.append(f"❌ EMAIL_CONTENT: Template file not found: {template_path}")
+
+        # Check for RECIPIENTS section
+        if not self.config.has_section("RECIPIENTS"):
+            errors.append("❌ RECIPIENTS section is missing from config.ini")
+        else:
+            recipients_from = self.get("RECIPIENTS", "recipients_from")
+            if not recipients_from:
+                errors.append("❌ RECIPIENTS: Missing recipients_from setting")
+
+            recipients_path = self.get("RECIPIENTS", "recipients_path")
+            if not recipients_path:
+                errors.append("❌ RECIPIENTS: Missing recipients_path setting")
+
+        # If we have errors, print them and quit
+        if errors:
+            print("\n" + "="*60)
+            print("🚨 CONFIGURATION VALIDATION FAILED")
+            print("="*60)
+            print("The following essential settings are missing or invalid:")
+            print()
+            for error in errors:
+                print(f"  {error}")
+            print()
+            print("💡 Please check your config.ini file and ensure all required")
+            print("   settings are properly configured.")
+            print()
+            print("📖 Refer to config.example.ini for detailed configuration examples.")
+            print("="*60)
+            exit(1)
+
+        # Success message
+        print("✅ Configuration validation passed - all essential settings found")
 
     def get(self, section, option, fallback=None):
         return self.config.get(section, option, fallback=fallback)
@@ -305,7 +368,7 @@ class Config:
     def get_email_personalization_settings(self):
         """Get email personalization configuration."""
         settings = {
-            "enable_personalization": self.get("EMAIL_PERSONALIZATION", "enable_personalization", fallback="true").lower() == "true",
+            "enable_personalization": self.get("EMAIL_PERSONALIZATION", "enable_personalization", fallback="false").lower() == "true",
             "personalization_mappings": {}
         }
 
