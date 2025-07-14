@@ -98,7 +98,7 @@ class QueueWorker:
             self.queue_manager.requeue_failed_email(email_task, self.sender_email, "Rate limit exceeded")
             return
         
-        # Wait for gap if needed
+        # Wait for gap if needed (with randomization)
         self.rate_limiter.wait_if_needed(self.sender_email)
         
         # Attempt to send the email

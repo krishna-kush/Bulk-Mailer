@@ -198,11 +198,9 @@ class SmartQueueManager:
         return False
     
     def _get_sender_gap_time(self, sender_email: str) -> float:
-        """Get the gap time for a specific sender."""
-        for sender in self.senders:
-            if sender['email'] == sender_email:
-                return sender.get('per_run_gap', 0)
-        return 0
+        """Get the gap time for a specific sender (uses average for randomized gaps)."""
+        # Use rate limiter's average gap time for more accurate queue calculations
+        return self.rate_limiter.get_average_gap_time(sender_email)
     
     def get_queue_stats(self) -> Dict[str, Any]:
         """Get comprehensive statistics for all queues."""

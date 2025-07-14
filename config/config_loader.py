@@ -229,15 +229,17 @@ class ConfigLoader:
                 limit_per_min = self.config.getint("SENDERS", f"{prefix}_limit_per_min", fallback=0)
                 limit_per_hour = self.config.getint("SENDERS", f"{prefix}_limit_per_hour", fallback=0)
                 per_run_gap = self.config.getint("SENDERS", f"{prefix}_per_run_gap", fallback=0)
-                
+                per_run_gap_randomizer = self.config.getint("SENDERS", f"{prefix}_per_run_gap_randomizer", fallback=0)
+
                 senders.append({
-                    "email": email, 
-                    "password": password, 
+                    "email": email,
+                    "password": password,
                     "smtp_id": smtp_id,
                     "total_limit_per_run": total_limit_per_run,
                     "limit_per_min": limit_per_min,
                     "limit_per_hour": limit_per_hour,
-                    "per_run_gap": per_run_gap
+                    "per_run_gap": per_run_gap,
+                    "per_run_gap_randomizer": per_run_gap_randomizer
                 })
         return senders
 

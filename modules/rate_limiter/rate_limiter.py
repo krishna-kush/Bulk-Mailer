@@ -27,6 +27,7 @@
 # ================================================================================
 
 import time
+import random
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 
@@ -42,6 +43,7 @@ class RateLimiter:
         self.sent_counts = defaultdict(int)  # Total sent per run for each sender
         self.sent_timestamps = defaultdict(deque)  # Timestamps for minute/hour tracking
         self.last_sent_time = defaultdict(float)  # Last sent time for gap control
+        self.next_gap_time = defaultdict(float)  # Store next randomized gap for each sender
         
         # Global counter for all emails sent
         self.global_sent_count = 0
@@ -52,16 +54,17 @@ class RateLimiter:
     def _parse_rate_limits(self):
         """Parse rate limit settings from sender configurations."""
         rate_limits = {}
-        
+
         for sender in self.senders_data:
             sender_email = sender['email']
             rate_limits[sender_email] = {
                 'total_limit_per_run': sender.get('total_limit_per_run', 0),
                 'limit_per_min': sender.get('limit_per_min', 0),
                 'limit_per_hour': sender.get('limit_per_hour', 0),
-                'per_run_gap': sender.get('per_run_gap', 0)
+                'per_run_gap': sender.get('per_run_gap', 0),
+                'per_run_gap_randomizer': sender.get('per_run_gap_randomizer', 0)
             }
-        
+
         return rate_limits
     
     def can_send(self, sender_email):
@@ -137,7 +140,9 @@ class RateLimiter:
 
         if per_run_gap > 0:
             time_since_last = current_time - self.last_sent_time[sender_email]
-            return time_since_last >= per_run_gap
+            # Use the randomized gap time if available, otherwise use base gap
+            required_gap = self.next_gap_time.get(sender_email, per_run_gap)
+            return time_since_last >= required_gap
 
         return True
 
@@ -154,8 +159,10 @@ class RateLimiter:
 
         if per_run_gap > 0:
             time_since_last = current_time - self.last_sent_time[sender_email]
-            if time_since_last < per_run_gap:
-                return per_run_gap - time_since_last
+            # Use the randomized gap time if available, otherwise use base gap
+            required_gap = self.next_gap_time.get(sender_email, per_run_gap)
+            if time_since_last < required_gap:
+                return required_gap - time_since_last
 
         return 0.0
     
@@ -167,22 +174,97 @@ class RateLimiter:
             if self.logger:
                 self.logger.debug(f"Sender '{sender_email}' gap control: waiting {wait_time:.2f} seconds")
             time.sleep(wait_time)
+
+    def wait_with_randomized_gap(self, sender_email):
+        """
+        Wait for the randomized gap time after sending an email.
+        This should be called after a successful email send.
+
+        Args:
+            sender_email: Email address of the sender
+        """
+        randomized_gap = self.get_randomized_gap_time(sender_email)
+
+        if randomized_gap > 0:
+            if self.logger:
+                self.logger.debug(f"Sender '{sender_email}' randomized gap: waiting {randomized_gap:.2f} seconds")
+            time.sleep(randomized_gap)
+
+    def get_randomized_gap_time(self, sender_email):
+        """
+        Calculate a randomized gap time for a sender.
+
+        Args:
+            sender_email: Email address of the sender
+
+        Returns:
+            float: Randomized gap time in seconds
+        """
+        if sender_email not in self.rate_limits:
+            return 0.0
+
+        limits = self.rate_limits[sender_email]
+        base_gap = limits['per_run_gap']
+        randomizer = limits['per_run_gap_randomizer']
+
+        if base_gap <= 0:
+            return 0.0
+
+        if randomizer <= 0:
+            # No randomization, return base gap
+            return float(base_gap)
+
+        # Calculate randomized gap: base_gap ± randomizer
+        # Use uniform distribution within the range
+        min_gap = max(1.0, base_gap - randomizer)  # Ensure minimum 1 second
+        max_gap = base_gap + randomizer
+
+        randomized_gap = random.uniform(min_gap, max_gap)
+
+        if self.logger:
+            self.logger.debug(f"Sender '{sender_email}' randomized gap: {randomized_gap:.2f}s "
+                            f"(base: {base_gap}s, randomizer: ±{randomizer}s, range: {min_gap:.1f}-{max_gap:.1f}s)")
+
+        return randomized_gap
+
+    def get_average_gap_time(self, sender_email):
+        """
+        Get the average gap time for a sender (used for queue calculations).
+
+        Args:
+            sender_email: Email address of the sender
+
+        Returns:
+            float: Average gap time in seconds
+        """
+        if sender_email not in self.rate_limits:
+            return 0.0
+
+        limits = self.rate_limits[sender_email]
+        base_gap = limits['per_run_gap']
+
+        # For queue calculations, use the base gap time as the average
+        # since randomization averages out to the base value over time
+        return float(base_gap) if base_gap > 0 else 0.0
     
     def record_sent(self, sender_email):
         """Record that an email was sent using the specified sender."""
         current_time = time.time()
-        
+
         # Update counters
         self.sent_counts[sender_email] += 1
         self.sent_timestamps[sender_email].append(current_time)
         self.last_sent_time[sender_email] = current_time
-        
+
+        # Generate next randomized gap time for this sender
+        self.next_gap_time[sender_email] = self.get_randomized_gap_time(sender_email)
+
         # Increment global counter
         self.global_sent_count += 1
-        
+
         if self.logger:
             self.logger.debug(f"Sender '{sender_email}' email sent. Total this run: {self.sent_counts[sender_email]}, "
-                             f"Global total: {self.global_sent_count}")
+                             f"Global total: {self.global_sent_count}, Next gap: {self.next_gap_time[sender_email]:.2f}s")
     
     def is_global_limit_reached(self):
         """Check if the global email limit has been reached."""
