@@ -33,10 +33,10 @@ from .email_composer import EmailComposer
 class EmailSender:
     """Handles the actual sending of emails via SMTP."""
 
-    def __init__(self, smtp_configs, logger):
+    def __init__(self, smtp_configs, logger, email_composer=None):
         self.smtp_configs = smtp_configs
         self.logger = logger
-        self.email_composer = EmailComposer(logger)
+        self.email_composer = email_composer or EmailComposer(logger)
 
     def send_email(self, sender_email, sender_password, recipient_email, subject, body_html,
                   attachments=None, cid_attachments=None, smtp_id="default"):

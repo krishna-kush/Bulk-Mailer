@@ -410,6 +410,16 @@ class ConfigLoader:
 
         return settings
 
+    def get_email_anti_spam_settings(self):
+        """Get email anti-spam configuration."""
+        settings = {
+            "enable_html_obfuscation": self.get("EMAIL_ANTI_SPAM", "enable_html_obfuscation", fallback="false").lower() == "true",
+            "html_obfuscation_intensity": self.get("EMAIL_ANTI_SPAM", "html_obfuscation_intensity", fallback="medium"),
+            "enable_manual_randomization": self.get("EMAIL_ANTI_SPAM", "enable_manual_randomization", fallback="true").lower() == "true"
+        }
+
+        return settings
+
     def get_email_attachments_settings(self):
         """Get email attachments configuration with CID mappings."""
         settings = {

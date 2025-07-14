@@ -36,13 +36,21 @@ from .email_personalizer import EmailPersonalizer
 class EmailComposer:
     """Composes email messages, including HTML content and attachments."""
 
-    def __init__(self, logger, personalization_config=None, base_dir=None):
+    def __init__(self, logger, personalization_config=None, base_dir=None, anti_spam_config=None):
         self.logger = logger
         self.personalizer = None
 
-        # Initialize personalizer if config provided
-        if personalization_config and base_dir:
-            self.personalizer = EmailPersonalizer(personalization_config, base_dir, logger)
+        # Initialize personalizer if config provided or anti-spam features enabled
+        if (personalization_config and base_dir) or (anti_spam_config and base_dir):
+            # Merge personalization and anti-spam configs
+            combined_config = {}
+            if personalization_config:
+                combined_config.update(personalization_config)
+            if anti_spam_config:
+                combined_config.update(anti_spam_config)
+
+            if combined_config and base_dir:
+                self.personalizer = EmailPersonalizer(combined_config, base_dir, logger)
 
     def compose_email(self, sender_email, recipient_email, subject, body_html_content,
                      attachment_paths=None, cid_attachments=None):

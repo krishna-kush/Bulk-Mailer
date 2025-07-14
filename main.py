@@ -121,14 +121,15 @@ def main():
     recipients_settings = config.get_recipients_settings()
     queue_management_settings = config.get_queue_management_settings()
     personalization_settings = config.get_email_personalization_settings()
+    anti_spam_settings = config.get_email_anti_spam_settings()
     attachments_settings = config.get_email_attachments_settings()
 
-    email_sender = EmailSender(smtp_configs, logger)
+    email_composer = EmailComposer(logger, personalization_settings, config.base_dir, anti_spam_settings)
+    email_sender = EmailSender(smtp_configs, logger, email_composer)
     sender_manager = SenderManager(
         senders_data,
         app_settings["sender_strategy"]
     )
-    email_composer = EmailComposer(logger, personalization_settings, config.base_dir)
     rate_limiter = RateLimiter(senders_data, rate_limiter_settings["global_limit"], logger)
     failure_tracker = SenderFailureTracker(failure_tracking_settings, logger)
     retry_handler = EmailRetryHandler(retry_settings, logger)
@@ -227,8 +228,8 @@ def main():
 
                 recipient_email = recipient['email']
 
-                # Personalize the email using the new personalization system
-                if personalization_settings["enable_personalization"]:
+                # Process email through personalizer (handles personalization and anti-spam features)
+                if email_composer.personalizer:
                     try:
                         personalized_body_html = email_composer.personalizer.personalize_email(
                             body_html, recipient
@@ -236,15 +237,15 @@ def main():
                         personalized_subject = email_composer.personalizer.personalize_email(
                             email_content_settings["subject"], recipient
                         )
-                        logger.debug(f"Personalized email for {recipient_email}")
+                        logger.debug(f"Processed email for {recipient_email} (personalization + anti-spam)")
                     except Exception as e:
-                        logger.warning(f"Personalization failed for {recipient_email}: {e}")
+                        logger.warning(f"Email processing failed for {recipient_email}: {e}")
                         # Fallback to legacy personalization
                         recipient_name = extract_name_from_email(recipient_email)
                         personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
                         personalized_subject = email_content_settings["subject"]
                 else:
-                    # Legacy personalization
+                    # Legacy personalization only
                     recipient_name = extract_name_from_email(recipient_email)
                     personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
                     personalized_subject = email_content_settings["subject"]

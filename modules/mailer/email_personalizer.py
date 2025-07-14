@@ -38,6 +38,9 @@ try:
 except ImportError:
     JINJA2_AVAILABLE = False
 
+from .html_obfuscator import HTMLObfuscator
+from .template_randomizer import TemplateRandomizer, setup_jinja2_environment, randomize_content
+
 class EmailPersonalizer:
     """
     Advanced email personalization system with Jinja2 template engine support.
@@ -47,7 +50,7 @@ class EmailPersonalizer:
     def __init__(self, config_settings: Dict, base_dir: str, logger):
         """
         Initialize email personalizer.
-        
+
         Args:
             config_settings: Personalization configuration
             base_dir: Base directory for template files
@@ -56,7 +59,13 @@ class EmailPersonalizer:
         self.config = config_settings
         self.base_dir = base_dir
         self.logger = logger
-        
+
+        # Initialize HTML obfuscator
+        self.html_obfuscator = HTMLObfuscator(logger)
+
+        # Initialize template randomizer
+        self.template_randomizer = TemplateRandomizer(logger)
+
         # Initialize Jinja2 environment if available
         if JINJA2_AVAILABLE:
             template_dir = os.path.join(base_dir, "templates", "email_templates")
@@ -66,7 +75,11 @@ class EmailPersonalizer:
                 trim_blocks=True,
                 lstrip_blocks=True
             )
-            self.logger.info("Jinja2 template engine initialized")
+
+            # Setup randomization features
+            self.jinja_env = setup_jinja2_environment(self.jinja_env, logger)
+
+            self.logger.info("Jinja2 template engine initialized with randomization features")
         else:
             self.jinja_env = None
             self.logger.warning("Jinja2 not available, falling back to basic string replacement")
@@ -98,30 +111,38 @@ class EmailPersonalizer:
         
         return mappings
     
-    def personalize_email(self, template_content: str, recipient_data: Dict, 
+    def personalize_email(self, template_content: str, recipient_data: Dict,
                          template_filename: Optional[str] = None) -> str:
         """
         Personalize email content with recipient-specific data.
-        
+
         Args:
             template_content: Raw HTML template content
             recipient_data: Recipient information dictionary
             template_filename: Optional template filename for Jinja2 loading
-            
+
         Returns:
             Personalized HTML content
         """
         try:
-            # Extract personalization data
+            # Step 1: Process manual randomization syntax first
+            processed_content = self._process_manual_randomization(template_content)
+
+            # Step 2: Extract personalization data
             personalization_data = self._extract_personalization_data(recipient_data)
-            
-            # Use Jinja2 if available and template has Jinja2 syntax
-            if JINJA2_AVAILABLE and self._has_jinja2_syntax(template_content):
-                return self._personalize_with_jinja2(template_content, personalization_data, template_filename)
+
+            # Step 3: Apply personalization
+            if JINJA2_AVAILABLE and self._has_jinja2_syntax(processed_content):
+                personalized_content = self._personalize_with_jinja2(processed_content, personalization_data, template_filename)
             else:
                 # Fallback to basic string replacement
-                return self._personalize_with_replacement(template_content, personalization_data)
-                
+                personalized_content = self._personalize_with_replacement(processed_content, personalization_data)
+
+            # Step 4: Apply HTML obfuscation if enabled
+            final_content = self._apply_html_obfuscation(personalized_content)
+
+            return final_content
+
         except Exception as e:
             self.logger.error(f"Error personalizing email: {e}")
             # Return original content if personalization fails
@@ -294,3 +315,71 @@ class EmailPersonalizer:
                 analysis['legacy_placeholders'].append(pattern)
         
         return analysis
+
+    def _process_manual_randomization(self, template_content: str) -> str:
+        """
+        Process manual randomization syntax in template content.
+
+        Args:
+            template_content: Template content with randomization syntax
+
+        Returns:
+            Processed template content
+        """
+        # Check if manual randomization is enabled
+        randomization_enabled = self.config.get('enable_manual_randomization', True)
+
+        if not randomization_enabled:
+            return template_content
+
+        # Use template randomizer to process content
+        return self.template_randomizer.process_template(template_content)
+
+    def _apply_html_obfuscation(self, html_content: str) -> str:
+        """
+        Apply HTML obfuscation if enabled.
+
+        Args:
+            html_content: HTML content to obfuscate
+
+        Returns:
+            Obfuscated HTML content
+        """
+        # Check if HTML obfuscation is enabled
+        obfuscation_enabled = self.config.get('enable_html_obfuscation', False)
+
+        if not obfuscation_enabled:
+            return html_content
+
+        # Get obfuscation intensity
+        intensity = self.config.get('html_obfuscation_intensity', 'medium')
+
+        # Apply obfuscation
+        return self.html_obfuscator.obfuscate_html(html_content, intensity)
+
+    def preview_randomization(self, template_content: str, count: int = 3) -> Dict[str, Any]:
+        """
+        Preview randomization variations for a template.
+
+        Args:
+            template_content: Template content with randomization syntax
+            count: Number of variations to generate
+
+        Returns:
+            Dictionary with preview information
+        """
+        # Find randomization patterns
+        patterns = self.template_randomizer.find_randomization_patterns(template_content)
+
+        # Generate variations
+        variations = self.template_randomizer.preview_variations(template_content, count)
+
+        # Validate syntax
+        validation = self.template_randomizer.validate_syntax(template_content)
+
+        return {
+            'patterns_found': len(patterns),
+            'patterns': patterns,
+            'variations': variations,
+            'validation': validation
+        }
