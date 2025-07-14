@@ -82,8 +82,9 @@ class HTMLObfuscator:
             if self.techniques['css_reordering']:
                 obfuscated = self._reorder_css_properties(obfuscated)
 
-            if self.techniques['css_class_reordering']:
-                obfuscated = self._reorder_css_classes(obfuscated)
+            # CSS class reordering temporarily disabled to prevent CSS loss
+            # if self.techniques['css_class_reordering']:
+            #     obfuscated = self._reorder_css_classes(obfuscated)
 
             if self.techniques['attribute_shuffling']:
                 obfuscated = self._shuffle_attributes(obfuscated)
@@ -215,26 +216,10 @@ class HTMLObfuscator:
     def _extract_css_class_definitions(self, style_content: str) -> list:
         """Extract individual CSS class definitions from style content."""
 
-        # First, remove media queries and other complex rules to avoid extracting classes from within them
-        temp_content = style_content
-
-        # Remove media queries (they'll be handled separately)
-        temp_content = re.sub(r'@media[^{]*\{(?:[^{}]*\{[^}]*\}[^{}]*)*\}', '', temp_content, flags=re.DOTALL)
-
-        # Remove keyframes
-        temp_content = re.sub(r'@keyframes[^{]*\{(?:[^{}]*\{[^}]*\}[^{}]*)*\}', '', temp_content, flags=re.DOTALL)
-
-        # Remove other at-rules
-        temp_content = re.sub(r'@[a-zA-Z-]+[^{]*\{[^}]*\}', '', temp_content, flags=re.DOTALL)
-
-        # Remove system selectors
-        temp_content = re.sub(r'\*\s*\{[^}]*\}', '', temp_content, flags=re.DOTALL)
-        temp_content = re.sub(r'body\s*\{[^}]*\}', '', temp_content, flags=re.DOTALL)
-        temp_content = re.sub(r'html\s*\{[^}]*\}', '', temp_content, flags=re.DOTALL)
-
-        # Now extract class definitions from the cleaned content
+        # Extract ALL CSS class definitions without removing any content
+        # This ensures we don't lose any CSS rules
         pattern = r'(\.[a-zA-Z][a-zA-Z0-9_-]*\s*\{[^}]*\})'
-        matches = re.findall(pattern, temp_content, re.DOTALL)
+        matches = re.findall(pattern, style_content, re.DOTALL)
 
         # Filter and clean matches
         filtered_matches = []
@@ -279,7 +264,21 @@ class HTMLObfuscator:
         """Extract non-class CSS rules (*, body, @media, etc.) that should be preserved."""
         non_class_rules = []
 
-        # Pattern to match various CSS rules that are not class definitions
+        # Handle media queries (they can contain nested rules)
+        media_pattern = r'(@media[^{]*\{(?:[^{}]*\{[^}]*\}[^{}]*)*\})'
+        media_matches = re.findall(media_pattern, style_content, re.DOTALL | re.IGNORECASE)
+        for match in media_matches:
+            if match.strip():
+                non_class_rules.append(match.strip())
+
+        # Handle keyframes (they can contain nested rules)
+        keyframes_pattern = r'(@keyframes[^{]*\{(?:[^{}]*\{[^}]*\}[^{}]*)*\})'
+        keyframes_matches = re.findall(keyframes_pattern, style_content, re.DOTALL | re.IGNORECASE)
+        for match in keyframes_matches:
+            if match.strip():
+                non_class_rules.append(match.strip())
+
+        # Handle simple patterns
         patterns = [
             r'(\*\s*\{[^}]*\})',  # Universal selector
             r'(body\s*\{[^}]*\})',  # Body selector
@@ -288,21 +287,6 @@ class HTMLObfuscator:
             r'(@font-face\s*\{[^}]*\})',  # Font face
         ]
 
-        # Handle media queries separately (they can contain nested rules)
-        media_pattern = r'(@media[^{]*\{(?:[^{}]*\{[^}]*\}[^{}]*)*\})'
-        media_matches = re.findall(media_pattern, style_content, re.DOTALL | re.IGNORECASE)
-        for match in media_matches:
-            if match.strip():
-                non_class_rules.append(match.strip())
-
-        # Handle keyframes separately (they can contain nested rules)
-        keyframes_pattern = r'(@keyframes[^{]*\{(?:[^{}]*\{[^}]*\}[^{}]*)*\})'
-        keyframes_matches = re.findall(keyframes_pattern, style_content, re.DOTALL | re.IGNORECASE)
-        for match in keyframes_matches:
-            if match.strip():
-                non_class_rules.append(match.strip())
-
-        # Handle other simple patterns
         for pattern in patterns:
             matches = re.findall(pattern, style_content, re.DOTALL | re.IGNORECASE)
             for match in matches:
