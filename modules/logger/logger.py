@@ -161,7 +161,7 @@ class AppLogger:
             
             # Remove old folders if we exceed the limit
             if len(log_folders) > max_files_to_keep:
-                folders_to_remove = log_folders[max_log_files_to_keep:]
+                folders_to_remove = log_folders[max_files_to_keep:]
                 for folder_path, _ in folders_to_remove:
                     try:
                         shutil.rmtree(folder_path)

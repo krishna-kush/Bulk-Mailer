@@ -101,7 +101,8 @@ class ConfigLoader:
             "db_table": "",
             "db_email_column": "email",
             "db_id_column": "id",
-            "filter_columns": ""
+            "filter_columns": "",
+            "ignore_patterns": ""
         }
         self.config["EMAIL_CONTENT"] = {
             "subject": "Test Subject",
@@ -343,6 +344,8 @@ class ConfigLoader:
         return {
             "subject": self.get("EMAIL_CONTENT", "subject"),
             "body_html_file": self.get("EMAIL_CONTENT", "body_html_file"),
+            "body_text_file": self.get("EMAIL_CONTENT", "body_text_file", fallback="templates/email_templates/plain_text_message.txt"),
+            "content_type": self.get("EMAIL_CONTENT", "content_type", fallback="html"),
             "attachment_dir": self.get("EMAIL_CONTENT", "attachment_dir")
         }
 
@@ -354,7 +357,8 @@ class ConfigLoader:
             "db_table": self.get("RECIPIENTS", "db_table", fallback=""),
             "db_email_column": self.get("RECIPIENTS", "db_email_column", fallback="email"),
             "db_id_column": self.get("RECIPIENTS", "db_id_column", fallback="id"),
-            "filter_columns": self._parse_filter_columns()
+            "filter_columns": self._parse_filter_columns(),
+            "ignore_patterns": self._parse_ignore_patterns()
         }
         return settings
 
@@ -394,6 +398,25 @@ class ConfigLoader:
             return {}
         
         return filters
+
+    def _parse_ignore_patterns(self):
+        """Parse ignore_patterns configuration into a list of patterns."""
+        patterns_string = self.get("RECIPIENTS", "ignore_patterns", fallback="")
+        if not patterns_string.strip():
+            return []
+
+        try:
+            # Split by comma and clean each pattern
+            patterns = []
+            for pattern in patterns_string.split(','):
+                pattern = pattern.strip()
+                if pattern:  # Skip empty patterns
+                    patterns.append(pattern.lower())  # Convert to lowercase for case-insensitive matching
+            return patterns
+        except Exception as e:
+            # If parsing fails, return empty list to avoid breaking the system
+            print(f"Warning: Error parsing ignore_patterns: {e}")
+            return []
 
     def get_email_personalization_settings(self):
         """Get email personalization configuration."""

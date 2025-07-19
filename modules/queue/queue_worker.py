@@ -108,10 +108,11 @@ class QueueWorker:
                 sender_password=self.sender_info['password'],
                 recipient_email=email_task.recipient_email,
                 subject=email_task.subject,
-                body_html=email_task.body_html,
+                body_content=email_task.body_content,
                 attachments=email_task.attachments,
                 cid_attachments=email_task.cid_attachments,
-                smtp_id=self.sender_info.get('smtp_id', 'default')
+                smtp_id=self.sender_info.get('smtp_id', 'default'),
+                content_type=email_task.content_type
             )
             
             if success:

@@ -14,8 +14,8 @@ class EmailRetryHandler:
                         f"max_retries_per_recipient={retry_settings['max_retries_per_recipient']}")
 
     def attempt_send_with_retries(self, email_sender, sender_info: Dict[str, Any],
-                                 recipient_email: str, subject: str, body_html: str,
-                                 attachments=None, cid_attachments=None) -> Dict[str, Any]:
+                                 recipient_email: str, subject: str, body_content: str,
+                                 attachments=None, cid_attachments=None, content_type: str = "html") -> Dict[str, Any]:
         """
         Attempt to send email with retries for a single sender.
         
@@ -51,10 +51,11 @@ class EmailRetryHandler:
                     sender_password=sender_password,
                     recipient_email=recipient_email,
                     subject=subject,
-                    body_html=body_html,
+                    body_content=body_content,
                     attachments=attachments,
                     cid_attachments=cid_attachments,
-                    smtp_id=smtp_id
+                    smtp_id=smtp_id,
+                    content_type=content_type
                 )
                 
                 if success:

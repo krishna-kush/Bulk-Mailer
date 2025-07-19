@@ -38,8 +38,8 @@ class EmailSender:
         self.logger = logger
         self.email_composer = email_composer or EmailComposer(logger)
 
-    def send_email(self, sender_email, sender_password, recipient_email, subject, body_html,
-                  attachments=None, cid_attachments=None, smtp_id="default"):
+    def send_email(self, sender_email, sender_password, recipient_email, subject, body_content,
+                  attachments=None, cid_attachments=None, smtp_id="default", content_type="html"):
         """Sends a single email using the specified SMTP configuration."""
         try:
             # Get SMTP settings for this sender
@@ -47,15 +47,16 @@ class EmailSender:
             if not smtp_settings:
                 self.logger.error(f"SMTP configuration '{smtp_id}' not found")
                 return False
-            
+
             # Use EmailComposer for better CID attachment support
             msg = self.email_composer.compose_email(
                 sender_email=sender_email,
                 recipient_email=recipient_email,
                 subject=subject,
-                body_html_content=body_html,
+                body_content=body_content,
                 attachment_paths=attachments,
-                cid_attachments=cid_attachments
+                cid_attachments=cid_attachments,
+                content_type=content_type
             )
 
             with smtplib.SMTP(smtp_settings["host"], smtp_settings["port"]) as server:

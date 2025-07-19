@@ -52,25 +52,30 @@ class EmailComposer:
             if combined_config and base_dir:
                 self.personalizer = EmailPersonalizer(combined_config, base_dir, logger)
 
-    def compose_email(self, sender_email, recipient_email, subject, body_html_content,
-                     attachment_paths=None, cid_attachments=None):
+    def compose_email(self, sender_email, recipient_email, subject, body_content,
+                     attachment_paths=None, cid_attachments=None, content_type="html"):
         """
-        Composes a MIMEMultipart message with HTML body and optional attachments.
+        Composes a MIMEMultipart message with HTML or plain text body and optional attachments.
 
         Args:
             sender_email: Sender's email address
             recipient_email: Recipient's email address
             subject: Email subject
-            body_html_content: HTML content of the email
+            body_content: Content of the email (HTML or plain text)
             attachment_paths: List of file paths for regular attachments
             cid_attachments: Dict of CID attachments {content_id: file_path}
+            content_type: "html" or "plain" for email content type
         """
         msg = MIMEMultipart()
         msg["From"] = sender_email
         msg["To"] = recipient_email
         msg["Subject"] = subject
 
-        msg.attach(MIMEText(body_html_content, "html"))
+        # Attach content based on type
+        if content_type.lower() == "plain":
+            msg.attach(MIMEText(body_content, "plain"))
+        else:
+            msg.attach(MIMEText(body_content, "html"))
 
         # Add regular attachments
         if attachment_paths:
@@ -117,8 +122,8 @@ class EmailComposer:
         return msg
 
     def compose_personalized_email(self, sender_email, recipient_data, subject,
-                                  body_html_template, attachment_paths=None,
-                                  cid_attachments=None, template_filename=None):
+                                  body_template, attachment_paths=None,
+                                  cid_attachments=None, template_filename=None, content_type="html"):
         """
         Composes a personalized email message using the personalization system.
 
@@ -126,10 +131,11 @@ class EmailComposer:
             sender_email: Sender's email address
             recipient_data: Dictionary containing recipient information
             subject: Email subject (can contain placeholders)
-            body_html_template: HTML template content
+            body_template: Template content (HTML or plain text)
             attachment_paths: List of attachment file paths
             cid_attachments: Dict of CID attachments {content_id: file_path}
             template_filename: Optional template filename for Jinja2
+            content_type: "html" or "plain" for email content type
 
         Returns:
             MIMEMultipart message object
@@ -139,9 +145,9 @@ class EmailComposer:
         # Personalize the email content
         if self.personalizer:
             try:
-                # Personalize HTML body
+                # Personalize body content
                 personalized_body = self.personalizer.personalize_email(
-                    body_html_template, recipient_data, template_filename
+                    body_template, recipient_data, template_filename
                 )
 
                 # Personalize subject if it contains placeholders
@@ -154,11 +160,11 @@ class EmailComposer:
             except Exception as e:
                 self.logger.warning(f"Personalization failed for {recipient_email}: {e}")
                 # Fallback to original content
-                personalized_body = body_html_template
+                personalized_body = body_template
                 personalized_subject = subject
         else:
             # No personalizer available, use original content
-            personalized_body = body_html_template
+            personalized_body = body_template
             personalized_subject = subject
             self.logger.debug("No personalizer available, using original content")
 
@@ -167,9 +173,10 @@ class EmailComposer:
             sender_email=sender_email,
             recipient_email=recipient_email,
             subject=personalized_subject,
-            body_html_content=personalized_body,
+            body_content=personalized_body,
             attachment_paths=attachment_paths,
-            cid_attachments=cid_attachments
+            cid_attachments=cid_attachments,
+            content_type=content_type
         )
 
     def validate_template(self, template_content):

@@ -157,14 +157,32 @@ def main():
         logger.error(f"Error loading recipients: {e}")
         return
 
-    # Load email body HTML
-    body_html = ""
-    body_html_path = os.path.join(config.base_dir, email_content_settings["body_html_file"])
-    if os.path.exists(body_html_path):
-        with open(body_html_path, "r") as f:
-            body_html = f.read()
+    # Load email body content (HTML or plain text)
+    content_type = email_content_settings.get("content_type", "html").lower()
+    body_content = ""
+
+    if content_type == "plain":
+        # Load plain text template
+        body_text_file = email_content_settings.get("body_text_file", "templates/email_templates/plain_text_message.txt")
+        body_text_path = os.path.join(config.base_dir, body_text_file)
+        if os.path.exists(body_text_path):
+            with open(body_text_path, "r") as f:
+                body_content = f.read()
+            logger.info(f"Loaded plain text template: {body_text_file}")
+        else:
+            logger.warning(f"Email text template not found: {body_text_path}. Using empty text body.")
     else:
-        logger.warning(f"Email HTML template not found: {body_html_path}. Using empty HTML body.")
+        # Load HTML template (default)
+        body_html_path = os.path.join(config.base_dir, email_content_settings["body_html_file"])
+        if os.path.exists(body_html_path):
+            with open(body_html_path, "r") as f:
+                body_content = f.read()
+            logger.info(f"Loaded HTML template: {email_content_settings['body_html_file']}")
+        else:
+            logger.warning(f"Email HTML template not found: {body_html_path}. Using empty HTML body.")
+
+    # For backward compatibility, keep body_html variable
+    body_html = body_content
 
     # Get regular attachments
     attachment_dir = os.path.join(config.base_dir, email_content_settings["attachment_dir"])
@@ -242,22 +260,33 @@ def main():
                         logger.warning(f"Email processing failed for {recipient_email}: {e}")
                         # Fallback to legacy personalization
                         recipient_name = extract_name_from_email(recipient_email)
-                        personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
+                        if content_type == "plain":
+                            # Plain text personalization
+                            personalized_body_html = body_html.replace('{{recipient_name}}', recipient_name)
+                        else:
+                            # HTML personalization
+                            personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
                         personalized_subject = email_content_settings["subject"]
                 else:
                     # Legacy personalization only
                     recipient_name = extract_name_from_email(recipient_email)
-                    personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
+                    if content_type == "plain":
+                        # Plain text personalization
+                        personalized_body_html = body_html.replace('{{recipient_name}}', recipient_name)
+                    else:
+                        # HTML personalization
+                        personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
                     personalized_subject = email_content_settings["subject"]
 
                 # Create email task
                 email_task = EmailTask(
                     recipient_data=recipient,
                     subject=personalized_subject,
-                    body_html=personalized_body_html,
+                    body_content=personalized_body_html,
                     attachments=attachments,
                     cid_attachments=cid_attachments,
-                    max_attempts=fallback_settings["max_fallback_attempts"]
+                    max_attempts=fallback_settings["max_fallback_attempts"],
+                    content_type=content_type
                 )
 
                 # Set total available senders for retry logic
@@ -329,12 +358,22 @@ def main():
                     logger.warning(f"Personalization failed for {recipient}: {e}")
                     # Fallback to legacy personalization
                     recipient_name = extract_name_from_email(recipient)
-                    personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
+                    if content_type == "plain":
+                        # Plain text personalization
+                        personalized_body_html = body_html.replace('{{recipient_name}}', recipient_name)
+                    else:
+                        # HTML personalization
+                        personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
                     personalized_subject = email_content_settings["subject"]
             else:
                 # Legacy personalization
                 recipient_name = extract_name_from_email(recipient)
-                personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
+                if content_type == "plain":
+                    # Plain text personalization
+                    personalized_body_html = body_html.replace('{{recipient_name}}', recipient_name)
+                else:
+                    # HTML personalization
+                    personalized_body_html = body_html.replace('Hi <strong>Name</strong>,', f'Hi <strong>{recipient_name}</strong>,')
                 personalized_subject = email_content_settings["subject"]
 
             for sender in senders_data:
@@ -363,9 +402,10 @@ def main():
                     sender_info=sender,
                     recipient_email=recipient,
                     subject=personalized_subject,
-                    body_html=personalized_body_html,
+                    body_content=personalized_body_html,
                     attachments=attachments,
-                    cid_attachments=cid_attachments
+                    cid_attachments=cid_attachments,
+                    content_type=content_type
                 )
                 
                 senders_used += 1

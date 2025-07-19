@@ -35,24 +35,28 @@ class EmailTask:
     Each email task maintains its own state for sender attempts and failure tracking.
     """
     
-    def __init__(self, recipient_data: Dict[str, Any], subject: str, body_html: str,
-                 attachments: list = None, cid_attachments: dict = None, max_attempts: int = 3):
+    def __init__(self, recipient_data: Dict[str, Any], subject: str, body_content: str,
+                 attachments: list = None, cid_attachments: dict = None, max_attempts: int = 3, content_type: str = "html"):
         """
         Initialize an email task.
-        
+
         Args:
             recipient_data: Dictionary containing recipient information (email, row_id, etc.)
             subject: Email subject line
-            body_html: HTML body content
+            body_content: Email body content (HTML or plain text)
             attachments: List of attachment file paths
             cid_attachments: Dict of CID attachments {content_id: file_path}
             max_attempts: Maximum total attempts across all senders
+            content_type: Content type ("html" or "plain")
         """
         # Email content
         self.recipient_data = recipient_data
         self.recipient_email = recipient_data.get('email', '')
         self.subject = subject
-        self.body_html = body_html
+        self.body_content = body_content
+        self.content_type = content_type
+        # For backward compatibility
+        self.body_html = body_content
         self.attachments = attachments or []
         self.cid_attachments = cid_attachments or {}
         

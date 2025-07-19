@@ -33,7 +33,7 @@ from typing import Dict, Any, Optional
 from modules.core.utils import extract_name_from_email
 
 try:
-    from jinja2 import Template, Environment, FileSystemLoader, meta
+    from jinja2 import Environment, FileSystemLoader, meta
     JINJA2_AVAILABLE = True
 except ImportError:
     JINJA2_AVAILABLE = False
@@ -60,6 +60,9 @@ class EmailPersonalizer:
         self.base_dir = base_dir
         self.logger = logger
 
+        # Check if personalization is enabled
+        self.personalization_enabled = config_settings.get('enable_personalization', False)
+
         # Initialize HTML obfuscator
         self.html_obfuscator = HTMLObfuscator(logger)
 
@@ -83,19 +86,27 @@ class EmailPersonalizer:
         else:
             self.jinja_env = None
             self.logger.warning("Jinja2 not available, falling back to basic string replacement")
-        
-        # Default personalization mappings
-        self.default_mappings = {
-            'recipient_name': 'email_extraction',
-            'sender_name': 'static:[SENDER_NAME]',
-            'sender_title': 'static:[SENDER_TITLE]',
-            'company_name': 'database_column:company_name',
-            'current_date': 'dynamic:current_date',
-            'current_year': 'dynamic:current_year',
-            'industry': 'database_column:industry',
-            'website': 'database_column:website'
-        }
-        
+
+        # Default personalization mappings - only include database columns when personalization is enabled
+        if self.personalization_enabled:
+            self.default_mappings = {
+                'recipient_name': 'email_extraction',
+                'sender_name': 'static:[SENDER_NAME]',
+                'sender_title': 'static:[SENDER_TITLE]',
+                'company_name': 'database_column:company_name',
+                'current_date': 'dynamic:current_date',
+                'current_year': 'dynamic:current_year',
+                'industry': 'database_column:industry',
+                'website': 'database_column:website'
+            }
+        else:
+            # Minimal mappings when personalization is disabled - only essential ones that don't require database columns
+            self.default_mappings = {
+                'recipient_name': 'email_extraction',
+                'current_date': 'dynamic:current_date',
+                'current_year': 'dynamic:current_year'
+            }
+
         # Load custom mappings from config
         self.personalization_mappings = self._load_personalization_config()
     
@@ -158,8 +169,12 @@ class EmailPersonalizer:
                 if value is not None:
                     data[placeholder] = value
                 else:
-                    # Log warning for missing data but continue
-                    self.logger.warning(f"No data found for placeholder '{placeholder}' from source '{source}'")
+                    # Only log warnings for missing data when personalization is enabled
+                    # or when it's not a database column (to avoid spam when columns don't exist)
+                    if self.personalization_enabled or not source.startswith('database_column:'):
+                        self.logger.warning(f"No data found for placeholder '{placeholder}' from source '{source}'")
+                    else:
+                        self.logger.debug(f"No data found for placeholder '{placeholder}' from source '{source}' (personalization disabled)")
                     data[placeholder] = f"[{placeholder.upper()}]"  # Fallback placeholder
                     
             except Exception as e:
@@ -173,7 +188,7 @@ class EmailPersonalizer:
         if source == 'email_extraction':
             # Extract name from email address
             email = recipient_data.get('email', '')
-            return extract_name_from_email(email) if email else None
+            return extract_name_from_email(email, no_company=True) if email else None
             
         elif source.startswith('static:'):
             # Static value
@@ -229,8 +244,8 @@ class EmailPersonalizer:
                 # Load template from file
                 template = self.jinja_env.get_template(template_filename)
             else:
-                # Create template from string
-                template = Template(template_content, environment=self.jinja_env)
+                # Create template from string using the environment
+                template = self.jinja_env.from_string(template_content)
             
             # Render template with data
             rendered = template.render(**data)

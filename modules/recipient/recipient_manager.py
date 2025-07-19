@@ -2,6 +2,7 @@ import os
 import csv
 import sqlite3
 import threading
+import fnmatch
 from typing import List, Dict, Optional, Tuple
 
 
@@ -107,29 +108,38 @@ class RecipientManager:
     def _get_recipients_from_csv(self) -> List[Dict]:
         """Load recipients from CSV file."""
         recipients = []
+        ignored_count = 0
         recipients_path = self.config['recipients_path']
-        
+
         if not os.path.isabs(recipients_path):
             recipients_path = os.path.join(self.base_dir, recipients_path)
-        
+
         if not os.path.exists(recipients_path):
             raise FileNotFoundError(f"Recipients file not found: {recipients_path}")
-        
+
         try:
             with open(recipients_path, mode="r", newline="", encoding="utf-8") as csvfile:
                 reader = csv.reader(csvfile)
                 for row_num, row in enumerate(reader, 1):
                     if row and row[0].strip():  # Skip empty rows
                         email = row[0].strip()
+
+                        # Check if email should be ignored
+                        if self._should_ignore_email(email):
+                            ignored_count += 1
+                            continue
+
                         recipients.append({
                             'email': email,
                             'row_id': row_num,
                             'source': 'csv'
                         })
-            
+
             self.logger.info(f"Loaded {len(recipients)} recipients from CSV file")
+            if ignored_count > 0:
+                self.logger.info(f"Ignored {ignored_count} recipients due to ignore patterns")
             return recipients
-            
+
         except Exception as e:
             self.logger.error(f"Error reading CSV file {recipients_path}: {e}")
             raise
@@ -137,43 +147,53 @@ class RecipientManager:
     def _get_recipients_from_db(self) -> List[Dict]:
         """Load recipients from database, excluding already sent emails and applying filters."""
         recipients = []
-        
+        ignored_count = 0
+
         try:
             connection = self._get_db_connection()
             cursor = connection.cursor()
-            
+
             # Build the base query
             query = f"""
                 SELECT {self.config['db_id_column']} as id, {self.config['db_email_column']} as email, email_sent
                 FROM {self.config['db_table']}
-                WHERE {self.config['db_email_column']} IS NOT NULL 
+                WHERE {self.config['db_email_column']} IS NOT NULL
                 AND {self.config['db_email_column']} != ''
                 AND (email_sent IS NULL OR email_sent = '')
             """
-            
+
             # Add column filters if specified
             filter_conditions, filter_params = self._build_filter_conditions()
             if filter_conditions:
                 query += f" AND ({filter_conditions})"
-            
+
             self.logger.debug(f"Executing query: {query}")
             self.logger.debug(f"With parameters: {filter_params}")
             cursor.execute(query, filter_params)
             rows = cursor.fetchall()
-            
+
             for row in rows:
+                email = row['email']
+
+                # Check if email should be ignored
+                if self._should_ignore_email(email):
+                    ignored_count += 1
+                    continue
+
                 recipients.append({
-                    'email': row['email'],
+                    'email': email,
                     'row_id': row['id'],  # Now uses the configurable primary key
                     'source': 'db',
                     'status': row['email_sent']
                 })
-            
+
             self.logger.info(f"Loaded {len(recipients)} unsent recipients from database")
             if filter_conditions:
                 self.logger.info(f"Applied column filters: {filter_conditions}")
+            if ignored_count > 0:
+                self.logger.info(f"Ignored {ignored_count} recipients due to ignore patterns")
             return recipients
-            
+
         except Exception as e:
             self.logger.error(f"Error reading from database: {e}")
             raise
@@ -208,6 +228,39 @@ class RecipientManager:
             parameters.extend(values)
         
         return ' AND '.join(conditions) if conditions else "", parameters
+
+    def _should_ignore_email(self, email: str) -> bool:
+        """
+        Check if an email should be ignored based on ignore patterns.
+
+        Args:
+            email: Email address to check
+
+        Returns:
+            True if email should be ignored, False otherwise
+        """
+        if not email:
+            return True
+
+        ignore_patterns = self.config.get('ignore_patterns', [])
+        if not ignore_patterns:
+            return False
+
+        email_lower = email.lower().strip()
+
+        for pattern in ignore_patterns:
+            if not pattern:
+                continue
+
+            # Convert pattern to lowercase for case-insensitive matching
+            pattern_lower = pattern.lower().strip()
+
+            # Use fnmatch for wildcard pattern matching
+            if fnmatch.fnmatch(email_lower, pattern_lower):
+                self.logger.debug(f"Email '{email}' ignored due to pattern '{pattern}'")
+                return True
+
+        return False
     
     def update_recipient_status(self, recipient: Dict, status: str) -> bool:
         """Update recipient status in database. Only works for database source."""
