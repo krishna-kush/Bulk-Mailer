@@ -55,7 +55,8 @@ class EmailRetryHandler:
                     attachments=attachments,
                     cid_attachments=cid_attachments,
                     smtp_id=smtp_id,
-                    content_type=content_type
+                    content_type=content_type,
+                    sender_info=sender_info  # Pass complete sender info for browser automation
                 )
                 
                 if success:

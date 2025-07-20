@@ -134,7 +134,23 @@ def _is_likely_company_name(name_part):
         'blockchain', 'crypto', 'cryptocurrency', 'bitcoin', 'ethereum', 'defi', 'nft',
         'metaverse', 'virtual', 'augmented', 'reality', 'vr', 'ar', 'iot', 'saas', 'paas',
         'iaas', 'api', 'sdk', 'devops', 'agile', 'scrum', 'lean', 'mvp', 'b2b', 'b2c',
-        'b2g', 'p2p', 'marketplace', 'aggregator', 'disruptor', 'unicorn', 'decacorn'
+        'b2g', 'p2p', 'marketplace', 'aggregator', 'disruptor', 'unicorn', 'decacorn',
+
+        # German business terms
+        'hauptversammlung', 'gesellschaft', 'unternehmen', 'firma', 'betrieb', 'konzern',
+        'holding', 'verwaltung', 'management', 'geschäft', 'handel', 'vertrieb', 'verkauf',
+        'produktion', 'herstellung', 'entwicklung', 'forschung', 'beratung', 'service',
+        'dienstleistung', 'technik', 'technologie', 'software', 'system', 'lösung',
+        'datenschutz', 'sicherheit', 'qualität', 'innovation', 'digital', 'online',
+
+        # Compound word patterns (common in tech/business)
+        'workspace', 'workgroup', 'workflow', 'workplace', 'workstation', 'framework',
+        'software', 'hardware', 'firmware', 'middleware', 'database', 'datastore',
+        'datacenter', 'dataflow', 'dataset', 'datapoint', 'endpoint', 'frontend',
+        'backend', 'fullstack', 'devops', 'sysops', 'netops', 'secops', 'cloudops',
+        'automate', 'optimize', 'streamline', 'digitize', 'modernize', 'transform',
+        'googleworkspace', 'microsoft365', 'office365', 'salesforce', 'hubspot',
+        'mailchimp', 'sendinblue', 'cloudflare', 'amazonaws', 'googlecloud'
     }
 
     # Check if the name contains strong company indicators as whole words or clear patterns

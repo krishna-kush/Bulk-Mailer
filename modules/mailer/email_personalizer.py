@@ -63,6 +63,9 @@ class EmailPersonalizer:
         # Check if personalization is enabled
         self.personalization_enabled = config_settings.get('enable_personalization', False)
 
+        # Track logged warnings to avoid spam
+        self._logged_warnings = set()
+
         # Initialize HTML obfuscator
         self.html_obfuscator = HTMLObfuscator(logger)
 
@@ -169,12 +172,20 @@ class EmailPersonalizer:
                 if value is not None:
                     data[placeholder] = value
                 else:
-                    # Only log warnings for missing data when personalization is enabled
-                    # or when it's not a database column (to avoid spam when columns don't exist)
-                    if self.personalization_enabled or not source.startswith('database_column:'):
-                        self.logger.warning(f"No data found for placeholder '{placeholder}' from source '{source}'")
-                    else:
-                        self.logger.debug(f"No data found for placeholder '{placeholder}' from source '{source}' (personalization disabled)")
+                    # Smart warning logging - avoid spam for missing database columns
+                    warning_key = f"{placeholder}:{source}"
+                    if warning_key not in self._logged_warnings:
+                        if self.personalization_enabled and not source.startswith('database_column:'):
+                            # Only warn for non-database sources when personalization is enabled
+                            self.logger.warning(f"No data found for placeholder '{placeholder}' from source '{source}'")
+                            self._logged_warnings.add(warning_key)
+                        elif not self.personalization_enabled:
+                            self.logger.debug(f"No data found for placeholder '{placeholder}' from source '{source}' (personalization disabled)")
+                        else:
+                            # Database column missing - log once as debug, not warning
+                            self.logger.debug(f"Database column '{source}' not found for placeholder '{placeholder}' - using fallback")
+                            self._logged_warnings.add(warning_key)
+
                     data[placeholder] = f"[{placeholder.upper()}]"  # Fallback placeholder
                     
             except Exception as e:

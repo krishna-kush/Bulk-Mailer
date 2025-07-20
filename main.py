@@ -33,6 +33,7 @@ import threading
 from config.config_loader import ConfigLoader
 from modules.logger.logger import AppLogger
 from modules.mailer.email_sender import EmailSender
+from modules.mailer.unified_email_sender import UnifiedEmailSender
 from modules.sender.sender_manager import SenderManager
 from modules.mailer.email_composer import EmailComposer
 from modules.rate_limiter.rate_limiter import RateLimiter
@@ -124,8 +125,23 @@ def main():
     anti_spam_settings = config.get_email_anti_spam_settings()
     attachments_settings = config.get_email_attachments_settings()
 
+    # Load browser automation settings
+    browser_automation_settings = config.get_browser_automation_settings()
+    browser_providers_settings = config.get_browser_providers_settings()
+    sending_mode = app_settings.get("sending_mode", "smtp")
+
     email_composer = EmailComposer(logger, personalization_settings, config.base_dir, anti_spam_settings)
-    email_sender = EmailSender(smtp_configs, logger, email_composer)
+
+    # Use unified email sender that supports both SMTP and browser automation
+    email_sender = UnifiedEmailSender(
+        smtp_configs=smtp_configs,
+        browser_config=browser_automation_settings,
+        providers_config=browser_providers_settings,
+        sending_mode=sending_mode,
+        logger=logger,
+        email_composer=email_composer,
+        base_dir=config.base_dir
+    )
     sender_manager = SenderManager(
         senders_data,
         app_settings["sender_strategy"]
@@ -135,10 +151,44 @@ def main():
     retry_handler = EmailRetryHandler(retry_settings, logger)
 
     logger.info(f"Initialized email system with strategy: {app_settings['sender_strategy']}")
+    logger.info(f"Email sending mode: {sending_mode}")
     logger.info(f"Fallback enabled: {fallback_settings['enable_fallback']}")
     logger.info(f"Max fallback attempts: {fallback_settings['max_fallback_attempts']}")
     logger.info(f"Global email limit: {rate_limiter_settings['global_limit']}")
     logger.info(f"Loaded {len(senders_data)} senders")
+
+    # Validate sender configurations for the current mode
+    valid_senders = []
+    for sender in senders_data:
+        if email_sender.validate_sender_configuration(sender):
+            valid_senders.append(sender)
+        else:
+            logger.warning(f"Skipping invalid sender configuration: {sender.get('email')}")
+
+    if not valid_senders:
+        logger.error("No valid senders found for current sending mode. Please check your configuration.")
+        return
+
+    logger.info(f"Validated {len(valid_senders)} senders for {sending_mode} mode")
+    senders_data = valid_senders  # Use only valid senders
+
+    # Prepare senders for browser automation mode
+    if sending_mode == "browser":
+        logger.info("Preparing senders for browser automation...")
+        prepared_senders = []
+        for sender in senders_data:
+            if email_sender.prepare_sender(sender):
+                prepared_senders.append(sender)
+                logger.info(f"✓ Prepared sender: {sender['email']}")
+            else:
+                logger.warning(f"✗ Failed to prepare sender: {sender['email']}")
+
+        if not prepared_senders:
+            logger.error("No senders could be prepared for browser automation. Check cookies and configurations.")
+            return
+
+        logger.info(f"Successfully prepared {len(prepared_senders)} senders for browser automation")
+        senders_data = prepared_senders
 
     # Initialize recipient manager
     recipient_manager = RecipientManager(recipients_settings, config.base_dir, logger)
@@ -475,6 +525,13 @@ def main():
     logger.info(f"  Max retries per recipient: {settings['max_retries_per_recipient']}")
     
     logger.info("=" * 60)
+
+    # Cleanup browser automation resources
+    try:
+        email_sender.close()
+        logger.info("Email sender resources cleaned up successfully")
+    except Exception as e:
+        logger.error(f"Error during email sender cleanup: {e}")
 
 if __name__ == "__main__":
     main()

@@ -133,8 +133,22 @@ class ConfigLoader:
                 for i, sender in enumerate(senders, 1):
                     if not sender.get('email'):
                         errors.append(f"❌ Sender {i}: Missing email address")
-                    if not sender.get('password'):
-                        errors.append(f"❌ Sender {i}: Missing password")
+
+                    # Check if this is browser automation or SMTP mode
+                    provider = sender.get('provider')
+                    if provider:
+                        # Browser automation mode - check for cookie file OR password
+                        cookie_file = sender.get('cookie_file')
+                        password = sender.get('password')
+                        if not cookie_file and not password:
+                            errors.append(f"❌ Sender {i}: Missing both cookie_file and password for browser automation")
+                        elif cookie_file and not os.path.exists(cookie_file):
+                            if not password:
+                                errors.append(f"❌ Sender {i}: Cookie file not found and no password provided as fallback")
+                    else:
+                        # SMTP mode - check for password
+                        if not sender.get('password'):
+                            errors.append(f"❌ Sender {i}: Missing password for SMTP mode")
 
         # Check for SMTP_CONFIGS section (required for multiple SMTP providers)
         if not self.config.has_section("SMTP_CONFIGS"):
@@ -223,14 +237,30 @@ class ConfigLoader:
             if key.endswith("_email"):
                 prefix = key.replace("_email", "")
                 email = value
-                password = self.config.get("SENDERS", f"{prefix}_password")
-                smtp_id = self.config.get("SENDERS", f"{prefix}_smtp", fallback="default")
+                # Parse browser automation settings first to determine if password is needed
+                provider = self.config.get("SENDERS", f"{prefix}_provider", fallback="")
+                cookie_file = self.config.get("SENDERS", f"{prefix}_cookie_file", fallback="")
+
+                # Handle dual authentication for browser automation
+                if provider:
+                    # Browser automation mode - password optional (fallback authentication)
+                    password = self.config.get("SENDERS", f"{prefix}_password", fallback="")
+                    smtp_id = "not_used"
+                else:
+                    # SMTP mode - password required
+                    password = self.config.get("SENDERS", f"{prefix}_password")
+                    smtp_id = self.config.get("SENDERS", f"{prefix}_smtp", fallback="default")
+
                 # Parse rate limiting settings for this sender
                 total_limit_per_run = self.config.getint("SENDERS", f"{prefix}_total_limit_per_run", fallback=0)
                 limit_per_min = self.config.getint("SENDERS", f"{prefix}_limit_per_min", fallback=0)
                 limit_per_hour = self.config.getint("SENDERS", f"{prefix}_limit_per_hour", fallback=0)
                 per_run_gap = self.config.getint("SENDERS", f"{prefix}_per_run_gap", fallback=0)
                 per_run_gap_randomizer = self.config.getint("SENDERS", f"{prefix}_per_run_gap_randomizer", fallback=0)
+
+                # Convert relative cookie file path to absolute
+                if cookie_file and not os.path.isabs(cookie_file):
+                    cookie_file = os.path.join(self.base_dir, cookie_file)
 
                 senders.append({
                     "email": email,
@@ -240,7 +270,9 @@ class ConfigLoader:
                     "limit_per_min": limit_per_min,
                     "limit_per_hour": limit_per_hour,
                     "per_run_gap": per_run_gap,
-                    "per_run_gap_randomizer": per_run_gap_randomizer
+                    "per_run_gap_randomizer": per_run_gap_randomizer,
+                    "provider": provider,
+                    "cookie_file": cookie_file
                 })
         return senders
 
@@ -314,7 +346,8 @@ class ConfigLoader:
 
     def get_application_settings(self):
         return {
-            "sender_strategy": self.get("APPLICATION", "sender_strategy")
+            "sender_strategy": self.get("APPLICATION", "sender_strategy"),
+            "sending_mode": self.get("APPLICATION", "sending_mode", fallback="smtp")
         }
 
     def get_queue_management_settings(self):
@@ -476,5 +509,112 @@ class ConfigLoader:
 
     def get_recipients_file(self):
         return self.get("RECIPIENTS", "recipients_path")
+
+    def get_browser_automation_settings(self):
+        """Get browser automation configuration."""
+        settings = {
+            "enable_browser_automation": self.getboolean("BROWSER_AUTOMATION", "enable_browser_automation", fallback=True),
+            "headless": self.getboolean("BROWSER_AUTOMATION", "headless", fallback=False),
+            "max_concurrent_browsers": self.getint("BROWSER_AUTOMATION", "max_concurrent_browsers", fallback=3),
+            "browser_timeout": self.getint("BROWSER_AUTOMATION", "browser_timeout", fallback=60),
+            "page_load_timeout": self.getint("BROWSER_AUTOMATION", "page_load_timeout", fallback=30),
+
+            # Timing settings
+            "min_action_delay": self.getint("BROWSER_AUTOMATION", "min_action_delay", fallback=1),
+            "max_action_delay": self.getint("BROWSER_AUTOMATION", "max_action_delay", fallback=3),
+            "typing_delay_min": self.getint("BROWSER_AUTOMATION", "typing_delay_min", fallback=50),
+            "typing_delay_max": self.getint("BROWSER_AUTOMATION", "typing_delay_max", fallback=150),
+            "compose_delay_min": self.getint("BROWSER_AUTOMATION", "compose_delay_min", fallback=2),
+            "compose_delay_max": self.getint("BROWSER_AUTOMATION", "compose_delay_max", fallback=5),
+            "send_delay_min": self.getint("BROWSER_AUTOMATION", "send_delay_min", fallback=1),
+            "send_delay_max": self.getint("BROWSER_AUTOMATION", "send_delay_max", fallback=3),
+
+            # Cookie management
+            "cookies_directory": self.get("BROWSER_AUTOMATION", "cookies_directory", fallback="cookies"),
+            "cookie_file_format": self.get("BROWSER_AUTOMATION", "cookie_file_format", fallback="json"),
+            "validate_cookies_on_startup": self.getboolean("BROWSER_AUTOMATION", "validate_cookies_on_startup", fallback=True),
+            "cookie_refresh_interval": self.getint("BROWSER_AUTOMATION", "cookie_refresh_interval", fallback=3600),
+
+            # Error handling
+            "max_retry_attempts": self.getint("BROWSER_AUTOMATION", "max_retry_attempts", fallback=3),
+            "retry_delay_base": self.getint("BROWSER_AUTOMATION", "retry_delay_base", fallback=5),
+            "auto_restart_browser": self.getboolean("BROWSER_AUTOMATION", "auto_restart_browser", fallback=True),
+            "screenshot_on_error": self.getboolean("BROWSER_AUTOMATION", "screenshot_on_error", fallback=True),
+            "error_screenshot_dir": self.get("BROWSER_AUTOMATION", "error_screenshot_dir", fallback="logs/screenshots"),
+
+            # Anti-detection
+            "randomize_viewport": self.getboolean("BROWSER_AUTOMATION", "randomize_viewport", fallback=True),
+            "use_random_user_agent": self.getboolean("BROWSER_AUTOMATION", "use_random_user_agent", fallback=True),
+            "simulate_human_behavior": self.getboolean("BROWSER_AUTOMATION", "simulate_human_behavior", fallback=True),
+            "mouse_movement_frequency": float(self.get("BROWSER_AUTOMATION", "mouse_movement_frequency", fallback="0.3")),
+            "scroll_frequency": float(self.get("BROWSER_AUTOMATION", "scroll_frequency", fallback="0.2")),
+            "pause_frequency": float(self.get("BROWSER_AUTOMATION", "pause_frequency", fallback="0.1"))
+        }
+
+        # Convert relative paths to absolute
+        if not os.path.isabs(settings["cookies_directory"]):
+            settings["cookies_directory"] = os.path.join(self.base_dir, settings["cookies_directory"])
+
+        if not os.path.isabs(settings["error_screenshot_dir"]):
+            settings["error_screenshot_dir"] = os.path.join(self.base_dir, settings["error_screenshot_dir"])
+
+        return settings
+
+    def get_browser_providers_settings(self):
+        """Get browser provider-specific configurations."""
+        providers = {}
+
+        if self.config.has_section("BROWSER_PROVIDERS"):
+            # ProtonMail settings
+            providers["protonmail"] = {
+                "enabled": self.getboolean("BROWSER_PROVIDERS", "protonmail_enabled", fallback=True),
+                "base_url": self.get("BROWSER_PROVIDERS", "protonmail_base_url", fallback="https://mail.proton.me"),
+                "login_url": self.get("BROWSER_PROVIDERS", "protonmail_login_url", fallback="https://account.proton.me/login"),
+                "compose_button": self.get("BROWSER_PROVIDERS", "protonmail_compose_button", fallback='[data-testid="sidebar:compose"]'),
+                "to_field": self.get("BROWSER_PROVIDERS", "protonmail_to_field", fallback='[data-testid="composer:to"]'),
+                "subject_field": self.get("BROWSER_PROVIDERS", "protonmail_subject_field", fallback='[data-testid="composer:subject"]'),
+                "body_field": self.get("BROWSER_PROVIDERS", "protonmail_body_field", fallback='[data-testid="rooster-editor"]'),
+                "send_button": self.get("BROWSER_PROVIDERS", "protonmail_send_button", fallback='[data-testid="composer:send-button"]'),
+                "compose_wait": self.getint("BROWSER_PROVIDERS", "protonmail_compose_wait", fallback=3),
+                "send_wait": self.getint("BROWSER_PROVIDERS", "protonmail_send_wait", fallback=2),
+                "page_load_wait": self.getint("BROWSER_PROVIDERS", "protonmail_page_load_wait", fallback=5),
+                "check_login_selector": self.get("BROWSER_PROVIDERS", "protonmail_check_login_selector", fallback='[data-testid="sidebar:compose"]'),
+                "login_required_selector": self.get("BROWSER_PROVIDERS", "protonmail_login_required_selector", fallback='[data-testid="username"]')
+            }
+
+            # Gmail settings (future implementation)
+            providers["gmail"] = {
+                "enabled": self.getboolean("BROWSER_PROVIDERS", "gmail_enabled", fallback=False),
+                "base_url": self.get("BROWSER_PROVIDERS", "gmail_base_url", fallback="https://mail.google.com"),
+                "compose_button": self.get("BROWSER_PROVIDERS", "gmail_compose_button", fallback=".T-I.T-I-KE.L3"),
+                "to_field": self.get("BROWSER_PROVIDERS", "gmail_to_field", fallback='[name="to"]'),
+                "subject_field": self.get("BROWSER_PROVIDERS", "gmail_subject_field", fallback='[name="subjectbox"]'),
+                "body_field": self.get("BROWSER_PROVIDERS", "gmail_body_field", fallback='[aria-label="Message Body"]'),
+                "send_button": self.get("BROWSER_PROVIDERS", "gmail_send_button", fallback='[data-testid="send"]')
+            }
+
+            # Outlook settings (future implementation)
+            providers["outlook"] = {
+                "enabled": self.getboolean("BROWSER_PROVIDERS", "outlook_enabled", fallback=False),
+                "base_url": self.get("BROWSER_PROVIDERS", "outlook_base_url", fallback="https://outlook.live.com"),
+                "compose_button": self.get("BROWSER_PROVIDERS", "outlook_compose_button", fallback='[data-testid="New mail"]'),
+                "to_field": self.get("BROWSER_PROVIDERS", "outlook_to_field", fallback='[aria-label="To"]'),
+                "subject_field": self.get("BROWSER_PROVIDERS", "outlook_subject_field", fallback='[aria-label="Add a subject"]'),
+                "body_field": self.get("BROWSER_PROVIDERS", "outlook_body_field", fallback='[aria-label="Message body"]'),
+                "send_button": self.get("BROWSER_PROVIDERS", "outlook_send_button", fallback='[aria-label="Send"]')
+            }
+
+            # Custom provider settings
+            providers["custom"] = {
+                "enabled": self.getboolean("BROWSER_PROVIDERS", "custom_provider_enabled", fallback=False),
+                "base_url": self.get("BROWSER_PROVIDERS", "custom_provider_base_url", fallback="https://mail.example.com"),
+                "compose_button": self.get("BROWSER_PROVIDERS", "custom_provider_compose_button", fallback=".compose-btn"),
+                "to_field": self.get("BROWSER_PROVIDERS", "custom_provider_to_field", fallback="#to-field"),
+                "subject_field": self.get("BROWSER_PROVIDERS", "custom_provider_subject_field", fallback="#subject-field"),
+                "body_field": self.get("BROWSER_PROVIDERS", "custom_provider_body_field", fallback="#body-field"),
+                "send_button": self.get("BROWSER_PROVIDERS", "custom_provider_send_button", fallback=".send-btn")
+            }
+
+        return providers
 
 

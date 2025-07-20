@@ -28,6 +28,7 @@
 
 import time
 import random
+import threading
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 
@@ -38,7 +39,10 @@ class RateLimiter:
         self.senders_data = senders_data
         self.global_limit = global_limit
         self.logger = logger
-        
+
+        # Thread safety for concurrent access
+        self._lock = threading.Lock()
+
         # Track counts and timings per sender
         self.sent_counts = defaultdict(int)  # Total sent per run for each sender
         self.sent_timestamps = defaultdict(deque)  # Timestamps for minute/hour tracking
@@ -78,11 +82,12 @@ class RateLimiter:
 
     def can_send_ignoring_gap(self, sender_email):
         """Check if we can send an email with the given sender (ignoring gap control)."""
-        # Check global limit first
-        if self.global_limit > 0 and self.global_sent_count >= self.global_limit:
-            if self.logger:
-                self.logger.warning(f"Global limit reached ({self.global_limit} emails). Cannot send more emails.")
-            return False
+        # Check global limit first (thread-safe)
+        with self._lock:
+            if self.global_limit > 0 and self.global_sent_count >= self.global_limit:
+                if self.logger:
+                    self.logger.warning(f"Global limit reached ({self.global_limit} emails). Cannot send more emails.")
+                return False
 
         if sender_email not in self.rate_limits:
             return True
@@ -246,46 +251,106 @@ class RateLimiter:
         # For queue calculations, use the base gap time as the average
         # since randomization averages out to the base value over time
         return float(base_gap) if base_gap > 0 else 0.0
-    
+
+    def try_reserve_send_slot(self, sender_email):
+        """
+        Atomically check if we can send and reserve a slot if possible.
+        This prevents race conditions in concurrent environments.
+
+        Returns:
+            bool: True if slot was reserved, False if limits would be exceeded
+        """
+        with self._lock:
+            # Check global limit first
+            if self.global_limit > 0 and self.global_sent_count >= self.global_limit:
+                if self.logger:
+                    self.logger.warning(f"Global limit reached ({self.global_limit} emails). Cannot send more emails.")
+                return False
+
+            # Check sender-specific limits
+            if sender_email not in self.rate_limits:
+                # No limits for this sender, reserve slot
+                self.global_sent_count += 1
+                return True
+
+            sender_limits = self.rate_limits[sender_email]
+
+            # Check total limit per run
+            if sender_limits['total_limit_per_run'] > 0:
+                if self.sent_counts[sender_email] >= sender_limits['total_limit_per_run']:
+                    if self.logger:
+                        self.logger.warning(f"Sender '{sender_email}' has reached total limit per run ({sender_limits['total_limit_per_run']})")
+                    return False
+
+            # All checks passed, reserve the slot
+            self.global_sent_count += 1
+            self.sent_counts[sender_email] += 1
+            return True
+
     def record_sent(self, sender_email):
-        """Record that an email was sent using the specified sender."""
+        """
+        Record that an email was sent using the specified sender.
+        Note: If using try_reserve_send_slot(), counters are already incremented.
+        This method only updates timestamps and gap timing.
+        """
         current_time = time.time()
 
-        # Update counters
-        self.sent_counts[sender_email] += 1
-        self.sent_timestamps[sender_email].append(current_time)
-        self.last_sent_time[sender_email] = current_time
+        # Update timestamps and timing (thread-safe)
+        with self._lock:
+            self.sent_timestamps[sender_email].append(current_time)
+            self.last_sent_time[sender_email] = current_time
 
-        # Generate next randomized gap time for this sender
-        self.next_gap_time[sender_email] = self.get_randomized_gap_time(sender_email)
+            # Generate next randomized gap time for this sender
+            self.next_gap_time[sender_email] = self.get_randomized_gap_time(sender_email)
 
-        # Increment global counter
-        self.global_sent_count += 1
+            if self.logger:
+                self.logger.debug(f"Sender '{sender_email}' email sent. Total this run: {self.sent_counts[sender_email]}, "
+                                 f"Global total: {self.global_sent_count}, Next gap: {self.next_gap_time[sender_email]:.2f}s")
 
-        if self.logger:
-            self.logger.debug(f"Sender '{sender_email}' email sent. Total this run: {self.sent_counts[sender_email]}, "
-                             f"Global total: {self.global_sent_count}, Next gap: {self.next_gap_time[sender_email]:.2f}s")
+    def record_sent_legacy(self, sender_email):
+        """
+        Legacy method that increments counters. Use this if not using try_reserve_send_slot().
+        """
+        current_time = time.time()
+
+        # Update counters (thread-safe)
+        with self._lock:
+            self.sent_counts[sender_email] += 1
+            self.sent_timestamps[sender_email].append(current_time)
+            self.last_sent_time[sender_email] = current_time
+
+            # Generate next randomized gap time for this sender
+            self.next_gap_time[sender_email] = self.get_randomized_gap_time(sender_email)
+
+            # Increment global counter
+            self.global_sent_count += 1
+
+            if self.logger:
+                self.logger.debug(f"Sender '{sender_email}' email sent. Total this run: {self.sent_counts[sender_email]}, "
+                                 f"Global total: {self.global_sent_count}, Next gap: {self.next_gap_time[sender_email]:.2f}s")
     
     def is_global_limit_reached(self):
         """Check if the global email limit has been reached."""
-        return self.global_limit > 0 and self.global_sent_count >= self.global_limit
+        with self._lock:
+            return self.global_limit > 0 and self.global_sent_count >= self.global_limit
     
     def get_stats(self):
         """Get statistics for all senders."""
-        stats = {
-            'global': {
-                'total_sent': self.global_sent_count,
-                'global_limit': self.global_limit,
-                'remaining': max(0, self.global_limit - self.global_sent_count) if self.global_limit > 0 else 'unlimited'
+        with self._lock:
+            stats = {
+                'global': {
+                    'total_sent': self.global_sent_count,
+                    'global_limit': self.global_limit,
+                    'remaining': max(0, self.global_limit - self.global_sent_count) if self.global_limit > 0 else 'unlimited'
+                }
             }
-        }
-        
-        for sender_email in self.rate_limits:
-            stats[sender_email] = {
-                'total_sent_this_run': self.sent_counts[sender_email],
-                'total_limit_per_run': self.rate_limits[sender_email]['total_limit_per_run'],
-                'remaining_this_run': max(0, self.rate_limits[sender_email]['total_limit_per_run'] - self.sent_counts[sender_email]) if self.rate_limits[sender_email]['total_limit_per_run'] > 0 else 'unlimited'
-            }
+
+            for sender_email in self.rate_limits:
+                stats[sender_email] = {
+                    'total_sent_this_run': self.sent_counts[sender_email],
+                    'total_limit_per_run': self.rate_limits[sender_email]['total_limit_per_run'],
+                    'remaining_this_run': max(0, self.rate_limits[sender_email]['total_limit_per_run'] - self.sent_counts[sender_email]) if self.rate_limits[sender_email]['total_limit_per_run'] > 0 else 'unlimited'
+                }
         return stats
 
 

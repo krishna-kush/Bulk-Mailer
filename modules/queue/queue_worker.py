@@ -92,16 +92,16 @@ class QueueWorker:
             self.queue_manager.requeue_failed_email(email_task, self.sender_email, "Sender blocked")
             return
         
-        # Check rate limits (excluding gap)
-        if not self.rate_limiter.can_send_ignoring_gap(self.sender_email):
+        # Wait for gap if needed (with randomization)
+        self.rate_limiter.wait_if_needed(self.sender_email)
+
+        # Atomically check limits and reserve slot (prevents race conditions)
+        if not self.rate_limiter.try_reserve_send_slot(self.sender_email):
             self.logger.warning(f"Sender {self.sender_email} rate limited, requeuing email")
             self.queue_manager.requeue_failed_email(email_task, self.sender_email, "Rate limit exceeded")
             return
-        
-        # Wait for gap if needed (with randomization)
-        self.rate_limiter.wait_if_needed(self.sender_email)
-        
-        # Attempt to send the email
+
+        # Attempt to send the email (slot already reserved)
         try:
             success = self.email_sender.send_email(
                 sender_email=self.sender_email,
@@ -112,14 +112,15 @@ class QueueWorker:
                 attachments=email_task.attachments,
                 cid_attachments=email_task.cid_attachments,
                 smtp_id=self.sender_info.get('smtp_id', 'default'),
-                content_type=email_task.content_type
+                content_type=email_task.content_type,
+                sender_info=self.sender_info  # Pass complete sender info for browser automation
             )
-            
+
             if success:
                 self._handle_success(email_task)
             else:
                 self._handle_failure(email_task, "SMTP send failed")
-                
+
         except Exception as e:
             self._handle_failure(email_task, f"Exception during send: {str(e)}")
     
