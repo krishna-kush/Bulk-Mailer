@@ -1,3 +1,32 @@
+# ================================================================================
+# BULK_MAILER - Professional Email Campaign Manager
+# ================================================================================
+#
+# Author: Krishna Kushwaha
+# GitHub: https://github.com/krishna-kush
+# Project: BULK_MAILER - Enterprise Email Campaign Management System
+# Repository: https://github.com/krishna-kush/Bulk-Mailer
+#
+# Description: Enterprise-grade email campaign management system designed for
+#              professional bulk email campaigns with advanced queue management,
+#              intelligent rate limiting, and robust error handling.
+#
+# Components: - Multi-Provider SMTP Management (Gmail, Outlook, Yahoo, Custom)
+#             - Intelligent Queue Management & Load Balancing
+#             - Advanced Rate Limiting & Throttling Control
+#             - Professional HTML Template System with Personalization
+#             - Retry Mechanisms with Exponential Backoff
+#             - Real-time Monitoring & Comprehensive Logging
+#
+# License: MIT License
+# Created: 2025
+#
+# ================================================================================
+# This file is part of the BULK_MAILER project.
+# For complete documentation, visit: https://github.com/krishna-kush/Bulk-Mailer
+# ================================================================================
+
+
 import os
 import csv
 import sqlite3
@@ -96,16 +125,16 @@ class RecipientManager:
             self.local_data.connection.row_factory = sqlite3.Row
         return self.local_data.connection
 
-    def get_recipients(self) -> List[Dict]:
+    def get_recipients(self, limit: int = None) -> List[Dict]:
         """Get list of recipients from configured source."""
         if self.config['recipients_from'] == 'csv':
-            return self._get_recipients_from_csv()
+            return self._get_recipients_from_csv(limit=limit)
         elif self.config['recipients_from'] == 'db':
-            return self._get_recipients_from_db()
+            return self._get_recipients_from_db(limit=limit)
         else:
             raise ValueError(f"Unsupported recipients_from value: {self.config['recipients_from']}")
     
-    def _get_recipients_from_csv(self) -> List[Dict]:
+    def _get_recipients_from_csv(self, limit: int = None) -> List[Dict]:
         """Load recipients from CSV file."""
         recipients = []
         ignored_count = 0
@@ -135,6 +164,10 @@ class RecipientManager:
                             'source': 'csv'
                         })
 
+                        # Check if we've reached the limit
+                        if limit and len(recipients) >= limit:
+                            break
+
             self.logger.info(f"Loaded {len(recipients)} recipients from CSV file")
             if ignored_count > 0:
                 self.logger.info(f"Ignored {ignored_count} recipients due to ignore patterns")
@@ -144,7 +177,7 @@ class RecipientManager:
             self.logger.error(f"Error reading CSV file {recipients_path}: {e}")
             raise
     
-    def _get_recipients_from_db(self) -> List[Dict]:
+    def _get_recipients_from_db(self, limit: int = None) -> List[Dict]:
         """Load recipients from database, excluding already sent emails and applying filters."""
         recipients = []
         ignored_count = 0
@@ -166,6 +199,10 @@ class RecipientManager:
             filter_conditions, filter_params = self._build_filter_conditions()
             if filter_conditions:
                 query += f" AND ({filter_conditions})"
+
+            # Add LIMIT clause if specified
+            if limit and limit > 0:
+                query += f" LIMIT {limit}"
 
             self.logger.debug(f"Executing query: {query}")
             self.logger.debug(f"With parameters: {filter_params}")

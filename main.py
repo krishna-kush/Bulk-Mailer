@@ -193,10 +193,13 @@ def main():
     # Initialize recipient manager
     recipient_manager = RecipientManager(recipients_settings, config.base_dir, logger)
     
-    # Load recipients
+    # Load recipients with global limit consideration
     try:
-        recipients = recipient_manager.get_recipients()
-        logger.info(f"Loaded {len(recipients)} recipients from {recipients_settings['recipients_from']} source")
+        global_limit = rate_limiter_settings['global_limit']
+        max_recipients_needed = min(global_limit * 2, 1000) if global_limit > 0 else 1000  # Load 2x global limit as buffer
+
+        recipients = recipient_manager.get_recipients(limit=max_recipients_needed)
+        logger.info(f"Loaded {len(recipients)} recipients from {recipients_settings['recipients_from']} source (limited by global_limit: {global_limit})")
         
         # Show statistics for database source
         if recipients_settings['recipients_from'] == 'db':

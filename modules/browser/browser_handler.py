@@ -62,6 +62,10 @@ class BrowserHandler:
         # Thread-local storage for thread-specific browser instances
         self._thread_local = threading.local()
 
+        # Track browser type per sender for switching on verification failure
+        self.sender_browser_types = {}  # {sender_email: 'chromium'/'firefox'}
+        self.default_browser_type = config.get('default_browser_type', 'firefox')
+
     def _safe_start_playwright(self):
         """Safely start Playwright with proper error handling."""
         try:
@@ -110,22 +114,96 @@ class BrowserHandler:
             # Configure browser options (same as main browser)
             browser_options = {
                 "headless": self.config.get("headless", False),
+                "timeout": 30000,  # 30 second timeout for browser launch
                 "args": [
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-infobars",
-                    "--window-position=0,0",
                     "--ignore-certificate-errors",
                     "--ignore-certificate-errors-spki-list",
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-web-security",
-                    "--disable-features=VizDisplayCompositor"
+                    "--disable-web-security"
                 ]
             }
 
-            self._thread_local.browser = self._thread_local.playwright.chromium.launch(**browser_options)
-            self.logger.debug(f"Launched separate browser for thread {threading.current_thread().name}")
+            # Store browsers by type in thread local storage
+            if not hasattr(self._thread_local, 'browsers'):
+                self._thread_local.browsers = {}
 
+            # Launch default browser type only (on-demand launching)
+            default_type = self.default_browser_type
+            if default_type not in self._thread_local.browsers:
+                try:
+                    if default_type == 'firefox':
+                        browser_instance = self._thread_local.playwright.firefox.launch(**browser_options)
+                        self.logger.debug(f"Launched Firefox browser for thread {threading.current_thread().name}")
+                    else:
+                        browser_instance = self._thread_local.playwright.chromium.launch(**browser_options)
+                        self.logger.debug(f"Launched Chromium browser for thread {threading.current_thread().name}")
+
+                    self._thread_local.browsers[default_type] = browser_instance
+
+                except Exception as e:
+                    self.logger.error(f"Failed to launch {default_type} browser in thread: {e}")
+                    raise
+
+            # Set default browser (for backward compatibility)
+            self._thread_local.browser = self._thread_local.browsers.get(default_type)
+
+        return self._thread_local.browser
+
+    def _get_browser_by_type(self, browser_type: str):
+        """Get browser instance of specific type for current thread."""
+        # Ensure thread browser is initialized
+        self._get_thread_browser()
+
+        # Launch the requested browser type if not already available
+        if hasattr(self._thread_local, 'browsers'):
+            if browser_type not in self._thread_local.browsers or self._thread_local.browsers[browser_type] is None:
+                self.logger.info(f"🚀 Launching {browser_type} browser on-demand...")
+                try:
+                    # Configure browser options
+                    if browser_type == 'firefox':
+                        browser_options = {
+                            "headless": self.config.get("headless", False),
+                            "timeout": 30000,
+                            "args": [
+                                "--no-sandbox",
+                                "--disable-infobars"
+                            ]
+                        }
+                    else:
+                        browser_options = {
+                            "headless": self.config.get("headless", False),
+                            "timeout": 30000,
+                            "args": [
+                                "--no-sandbox",
+                                "--disable-setuid-sandbox",
+                                "--disable-infobars",
+                                "--ignore-certificate-errors",
+                                "--ignore-certificate-errors-spki-list",
+                                "--disable-blink-features=AutomationControlled",
+                                "--disable-web-security"
+                            ]
+                        }
+
+                    if browser_type == 'firefox':
+                        browser_instance = self._thread_local.playwright.firefox.launch(**browser_options)
+                        self.logger.info(f"✅ Firefox browser launched successfully")
+                    else:
+                        browser_instance = self._thread_local.playwright.chromium.launch(**browser_options)
+                        self.logger.info(f"✅ Chromium browser launched successfully")
+
+                    self._thread_local.browsers[browser_type] = browser_instance
+
+                except Exception as e:
+                    self.logger.error(f"Failed to launch {browser_type} browser: {e}")
+                    return self._thread_local.browser
+
+            browser = self._thread_local.browsers[browser_type]
+            if browser:
+                return browser
+
+        self.logger.warning(f"Browser type {browser_type} not available, falling back to default")
         return self._thread_local.browser
 
     def _get_thread_contexts(self):
@@ -178,23 +256,70 @@ class BrowserHandler:
                 return True
             
             # Configure browser options (simplified approach like LinkedIn automation)
-            browser_options = {
-                "headless": self.config.get("headless", False),
-                "args": [
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-infobars",
-                    "--window-position=0,0",
-                    "--ignore-certificate-errors",
-                    "--ignore-certificate-errors-spki-list",
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-web-security",
-                    "--disable-features=VizDisplayCompositor"
-                ]
-            }
-            
-            self.logger.info(f"Launching browser (headless={self.config.get('headless', False)})...")
-            self.browser = self.playwright.chromium.launch(**browser_options)
+            # Use default browser type
+            default_type = self.default_browser_type
+
+            if default_type == 'firefox':
+                browser_options = {
+                    "headless": self.config.get("headless", False),
+                    "timeout": 30000,
+                    "args": [
+                        "--no-sandbox",
+                        "--disable-infobars"
+                    ]
+                }
+            else:
+                browser_options = {
+                    "headless": self.config.get("headless", False),
+                    "timeout": 30000,
+                    "args": [
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-infobars",
+                        "--ignore-certificate-errors",
+                        "--ignore-certificate-errors-spki-list",
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-web-security"
+                    ]
+                }
+
+            self.logger.info(f"Launching {default_type} browser (headless={self.config.get('headless', False)}) with 30s timeout...")
+
+            try:
+                if default_type == 'firefox':
+                    self.browser = self.playwright.firefox.launch(**browser_options)
+                    self.logger.info("✅ Firefox browser launched successfully")
+                else:
+                    self.browser = self.playwright.chromium.launch(**browser_options)
+                    self.logger.info("✅ Chromium browser launched successfully")
+            except Exception as e:
+                # Try the other browser type as fallback
+                fallback_type = 'chromium' if default_type == 'firefox' else 'firefox'
+                self.logger.warning(f"⚠️  {default_type} launch failed: {e}")
+                self.logger.info(f"🔄 Trying {fallback_type} as fallback...")
+                try:
+                    if fallback_type == 'firefox':
+                        fallback_options = {
+                            "headless": self.config.get("headless", False),
+                            "timeout": 30000,
+                            "args": ["--no-sandbox", "--disable-infobars"]
+                        }
+                        self.browser = self.playwright.firefox.launch(**fallback_options)
+                    else:
+                        fallback_options = {
+                            "headless": self.config.get("headless", False),
+                            "timeout": 30000,
+                            "args": [
+                                "--no-sandbox", "--disable-setuid-sandbox", "--disable-infobars",
+                                "--ignore-certificate-errors", "--ignore-certificate-errors-spki-list",
+                                "--disable-blink-features=AutomationControlled", "--disable-web-security"
+                            ]
+                        }
+                        self.browser = self.playwright.chromium.launch(**fallback_options)
+                    self.logger.info(f"✅ {fallback_type} browser launched successfully")
+                except Exception as e2:
+                    self.logger.error(f"❌ {fallback_type} launch also failed: {e2}")
+                    raise Exception(f"Both {default_type} and {fallback_type} launch failed. {default_type}: {e}, {fallback_type}: {e2}")
             self.logger.info("Browser launched successfully")
             return True
             
@@ -310,17 +435,19 @@ class BrowserHandler:
         """
         return self.contexts.get(email)
     
-    def create_page(self, sender_email: str) -> Optional[Page]:
+    def create_page(self, sender_email: str, force_browser_switch: bool = False) -> Optional[Page]:
         """
         Create new page in the context for specific sender email.
         Reuses the same context for all emails from the same sender to maintain session.
 
         Args:
             sender_email: Sender email address (used as context key for session reuse)
+            force_browser_switch: If True, switch to different browser type
 
         Returns:
             Page or None if failed
         """
+        start_time = time.time()
         try:
             # Use thread-local contexts and pages for complete thread isolation
             thread_contexts = self._get_thread_contexts()
@@ -339,14 +466,31 @@ class BrowserHandler:
                     del thread_pages[sender_email]
                     self.logger.debug(f"🔄 Previous tab for {sender_email} was closed, creating new one")
 
+            # Handle browser switching if requested
+            if force_browser_switch:
+                # Switch browser type and close existing context
+                new_browser_type = self.switch_browser_type(sender_email)
+                if sender_email in thread_contexts:
+                    try:
+                        thread_contexts[sender_email].close()
+                        del thread_contexts[sender_email]
+                        self.logger.info(f"🔄 Closed old context for browser switch to {new_browser_type}")
+                    except Exception as e:
+                        self.logger.debug(f"Failed to close old context: {e}")
+
             # Check if context exists for this sender in current thread
             # KEY CHANGE: Use sender_email as context key to reuse sessions
             if sender_email not in thread_contexts:
-                # Create context for this sender in current thread
-                thread_browser = self._get_thread_browser()
+                # Get browser type for this sender
+                browser_type = self.get_browser_type(sender_email)
+
+                # Create context for this sender in current thread with specified browser type
+                thread_browser = self._get_browser_by_type(browser_type)
                 if not thread_browser:
-                    self.logger.error(f"No browser available for thread {threading.current_thread().name}")
+                    self.logger.error(f"No {browser_type} browser available for thread {threading.current_thread().name}")
                     return None
+
+                self.logger.info(f"🌐 Using {browser_type} browser for {sender_email}")
 
                 context = thread_browser.new_context(
                     viewport={"width": 1920, "height": 1080},
@@ -515,7 +659,74 @@ class BrowserHandler:
                 self.logger.info(f"🔄 Closed browser session for sender {sender_email}")
         except Exception as e:
             self.logger.error(f"Error closing context for {sender_email}: {e}")
-    
+
+    def clear_browser_data(self, sender_email: str) -> bool:
+        """
+        Clear browser data (cookies, storage) for a specific sender context.
+
+        Args:
+            sender_email: Sender email address
+
+        Returns:
+            bool: True if cleared successfully
+        """
+        try:
+            thread_id = threading.current_thread().ident
+            thread_contexts = self.contexts.get(thread_id, {})
+
+            if sender_email in thread_contexts:
+                context = thread_contexts[sender_email]['context']
+
+                # Clear cookies
+                context.clear_cookies()
+                context.clear_permissions()
+
+                # Clear storage for all pages in context
+                for page in context.pages:
+                    try:
+                        page.evaluate("() => { localStorage.clear(); sessionStorage.clear(); }")
+                    except Exception as e:
+                        self.logger.debug(f"Failed to clear storage for page: {e}")
+
+                self.logger.info(f"Cleared browser data for {sender_email}")
+                return True
+            else:
+                self.logger.warning(f"No context found for {sender_email} to clear data")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"Failed to clear browser data for {sender_email}: {e}")
+            return False
+
+    def switch_browser_type(self, sender_email: str) -> str:
+        """
+        Switch browser type for a sender (Chromium <-> Firefox).
+
+        Args:
+            sender_email: Sender email address
+
+        Returns:
+            str: New browser type ('chromium' or 'firefox')
+        """
+        current_type = self.sender_browser_types.get(sender_email, self.default_browser_type)
+        new_type = 'firefox' if current_type == 'chromium' else 'chromium'
+        self.sender_browser_types[sender_email] = new_type
+
+        self.logger.info(f"🔄 Switched browser type for {sender_email}: {current_type} -> {new_type}")
+        return new_type
+
+    def get_browser_type(self, sender_email: str) -> str:
+        """
+        Get current browser type for a sender.
+
+        Args:
+            sender_email: Sender email address
+
+        Returns:
+            str: Browser type ('chromium' or 'firefox')
+        """
+        return self.sender_browser_types.get(sender_email, self.default_browser_type)
+
     def close_all_contexts(self):
         """Close all browser contexts."""
         for email in list(self.contexts.keys()):

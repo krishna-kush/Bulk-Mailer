@@ -518,6 +518,7 @@ class ConfigLoader:
             "max_concurrent_browsers": self.getint("BROWSER_AUTOMATION", "max_concurrent_browsers", fallback=3),
             "browser_timeout": self.getint("BROWSER_AUTOMATION", "browser_timeout", fallback=60),
             "page_load_timeout": self.getint("BROWSER_AUTOMATION", "page_load_timeout", fallback=30),
+            "enable_html_capture": self.getboolean("BROWSER_AUTOMATION", "enable_html_capture", fallback=False),
 
             # Timing settings
             "min_action_delay": self.getint("BROWSER_AUTOMATION", "min_action_delay", fallback=1),
@@ -591,6 +592,23 @@ class ConfigLoader:
                 "subject_field": self.get("BROWSER_PROVIDERS", "gmail_subject_field", fallback='[name="subjectbox"]'),
                 "body_field": self.get("BROWSER_PROVIDERS", "gmail_body_field", fallback='[aria-label="Message Body"]'),
                 "send_button": self.get("BROWSER_PROVIDERS", "gmail_send_button", fallback='[data-testid="send"]')
+            }
+
+            # Yahoo Mail settings
+            providers["yahoo"] = {
+                "enabled": self.getboolean("BROWSER_PROVIDERS", "yahoo_enabled", fallback=True),
+                "base_url": self.get("BROWSER_PROVIDERS", "yahoo_base_url", fallback="https://mail.yahoo.com"),
+                "login_url": self.get("BROWSER_PROVIDERS", "yahoo_login_url", fallback="https://login.yahoo.com"),
+                "compose_button": self.get("BROWSER_PROVIDERS", "yahoo_compose_button", fallback='button[data-test-id="compose-button"]'),
+                "to_field": self.get("BROWSER_PROVIDERS", "yahoo_to_field", fallback='input[data-test-id="to-field"]'),
+                "subject_field": self.get("BROWSER_PROVIDERS", "yahoo_subject_field", fallback='input[data-test-id="subject-field"]'),
+                "body_field": self.get("BROWSER_PROVIDERS", "yahoo_body_field", fallback='div[data-test-id="rte"]'),
+                "send_button": self.get("BROWSER_PROVIDERS", "yahoo_send_button", fallback='button[data-test-id="send-button"]'),
+                "compose_wait": self.getint("BROWSER_PROVIDERS", "yahoo_compose_wait", fallback=3),
+                "send_wait": self.getint("BROWSER_PROVIDERS", "yahoo_send_wait", fallback=2),
+                "page_load_wait": self.getint("BROWSER_PROVIDERS", "yahoo_page_load_wait", fallback=5),
+                "check_login_selector": self.get("BROWSER_PROVIDERS", "yahoo_check_login_selector", fallback='button[data-test-id="compose-button"]'),
+                "login_required_selector": self.get("BROWSER_PROVIDERS", "yahoo_login_required_selector", fallback='input[name="username"]')
             }
 
             # Outlook settings (future implementation)

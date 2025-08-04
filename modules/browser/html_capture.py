@@ -25,9 +25,15 @@
 
 import os
 import time
+import re
 from datetime import datetime
 from typing import Optional, Dict, Any
 from playwright.sync_api import Page
+try:
+    from bs4 import BeautifulSoup
+    BEAUTIFULSOUP_AVAILABLE = True
+except ImportError:
+    BEAUTIFULSOUP_AVAILABLE = False
 
 class HTMLCapture:
     """Utility for capturing HTML at critical automation steps."""
@@ -50,6 +56,65 @@ class HTMLCapture:
         
         # Capture counter for ordering
         self.capture_count = 0
+
+    def _format_html(self, html_content: str) -> str:
+        """
+        Format HTML content for better readability.
+
+        Args:
+            html_content: Raw HTML content
+
+        Returns:
+            Formatted HTML content
+        """
+        try:
+            if BEAUTIFULSOUP_AVAILABLE:
+                # Use BeautifulSoup for proper formatting
+                soup = BeautifulSoup(html_content, 'html.parser')
+                return soup.prettify()
+            else:
+                # Fallback: Basic formatting using regex
+                # Add newlines after common HTML tags
+                formatted = html_content
+
+                # Add newlines after opening tags
+                formatted = re.sub(r'(<(?:html|head|body|div|section|article|header|footer|nav|main|aside|form|table|tr|ul|ol|li)[^>]*>)', r'\1\n', formatted)
+
+                # Add newlines after closing tags
+                formatted = re.sub(r'(</(?:html|head|body|div|section|article|header|footer|nav|main|aside|form|table|tr|ul|ol|li)>)', r'\1\n', formatted)
+
+                # Add newlines after self-closing tags
+                formatted = re.sub(r'(<(?:br|hr|img|input|meta|link)[^>]*/>)', r'\1\n', formatted)
+
+                # Basic indentation (simple approach)
+                lines = formatted.split('\n')
+                indented_lines = []
+                indent_level = 0
+
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    # Decrease indent for closing tags
+                    if line.startswith('</'):
+                        indent_level = max(0, indent_level - 1)
+
+                    # Add indentation
+                    indented_lines.append('  ' * indent_level + line)
+
+                    # Increase indent for opening tags (but not self-closing)
+                    if line.startswith('<') and not line.startswith('</') and not line.endswith('/>') and not line.startswith('<!'):
+                        # Check if it's not a self-closing tag
+                        tag_name = line.split()[0][1:].split('>')[0]
+                        if tag_name.lower() not in ['br', 'hr', 'img', 'input', 'meta', 'link', 'area', 'base', 'col', 'embed', 'source', 'track', 'wbr']:
+                            indent_level += 1
+
+                return '\n'.join(indented_lines)
+
+        except Exception as e:
+            self.logger.warning(f"Failed to format HTML: {e}, returning raw content")
+            return html_content
     
     def capture_html(self, page: Page, step_name: str, description: str = "", 
                     additional_info: Optional[Dict[str, Any]] = None) -> str:
@@ -77,9 +142,10 @@ class HTMLCapture:
             current_url = page.url
             page_title = page.title()
             
-            # Get HTML content
-            html_content = page.content()
-            
+            # Get HTML content and format it for readability
+            raw_html_content = page.content()
+            html_content = self._format_html(raw_html_content)
+
             # Create debug header
             debug_header = f"""<!--
 ================================================================================

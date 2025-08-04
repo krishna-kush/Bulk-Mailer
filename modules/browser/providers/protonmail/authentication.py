@@ -30,22 +30,21 @@ import time
 import random
 from typing import Dict, Any, Optional
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
+from ..base.authentication import BaseAuthentication
 
-class ProtonMailAuthentication:
+class ProtonMailAuthentication(BaseAuthentication):
     """Handles ProtonMail authentication with fallback support."""
     
     def __init__(self, config: Dict[str, Any], logger, html_capture=None):
         """
         Initialize ProtonMail authentication.
-        
+
         Args:
             config: Provider-specific configuration
             logger: Logger instance
             html_capture: HTML capture utility
         """
-        self.config = config
-        self.logger = logger
-        self.html_capture = html_capture
+        super().__init__(config, logger, html_capture)
         self.base_url = config.get("base_url", "https://mail.proton.me")
         self.login_url = config.get("login_url", "https://account.proton.me/login")
         
@@ -299,7 +298,10 @@ class ProtonMailAuthentication:
 
             # Additional wait for dynamic content
             time.sleep(3)
-            
+
+            # Check for CAPTCHA/verification prompts
+            self._handle_verification_prompts(page, email)
+
             # Check if login was successful
             return self._verify_login_success(page)
                 

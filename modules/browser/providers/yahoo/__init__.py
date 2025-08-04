@@ -7,7 +7,16 @@
 # Project: BULK_MAILER - Enterprise Email Campaign Management System
 # Repository: https://github.com/krishna-kush/Bulk-Mailer
 #
-# Description: Email provider automation modules for browser-based email sending.
+# Description: Enterprise-grade email campaign management system designed for
+#              professional bulk email campaigns with advanced queue management,
+#              intelligent rate limiting, and robust error handling.
+#
+# Components: - Multi-Provider SMTP Management (Gmail, Outlook, Yahoo, Custom)
+#             - Intelligent Queue Management & Load Balancing
+#             - Advanced Rate Limiting & Throttling Control
+#             - Professional HTML Template System with Personalization
+#             - Retry Mechanisms with Exponential Backoff
+#             - Real-time Monitoring & Comprehensive Logging
 #
 # License: MIT License
 # Created: 2025
@@ -17,7 +26,6 @@
 # For complete documentation, visit: https://github.com/krishna-kush/Bulk-Mailer
 # ================================================================================
 
-from .protonmail import ProtonMailAutomation
-from .yahoo import YahooAutomation
+from .yahoo_automation import YahooAutomation
 
-__all__ = ['ProtonMailAutomation', 'YahooAutomation']
+__all__ = ['YahooAutomation']

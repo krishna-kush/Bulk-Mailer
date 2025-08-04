@@ -29,6 +29,7 @@ import time
 from typing import Dict, Any, Optional, List
 from .browser_handler import BrowserHandler
 from .providers.protonmail import ProtonMailAutomation
+from .providers.yahoo import YahooAutomation
 
 class BrowserEmailSender:
     """Handles email sending through browser automation instead of SMTP."""
@@ -75,7 +76,18 @@ class BrowserEmailSender:
                     self.email_content
                 )
                 self.logger.info("ProtonMail automation initialized")
-            
+
+            # Initialize Yahoo Mail automation
+            if self.providers_config.get("yahoo", {}).get("enabled", True):
+                self.provider_automations["yahoo"] = YahooAutomation(
+                    self.browser_config,  # Pass browser config for HTML capture settings
+                    self.logger,
+                    base_dir,
+                    self.email_personalization,
+                    self.email_content
+                )
+                self.logger.info("Yahoo Mail automation initialized")
+
             # TODO: Add other providers (Gmail, Outlook, etc.) when implemented
             # if self.providers_config.get("gmail", {}).get("enabled", False):
             #     self.provider_automations["gmail"] = GmailAutomation(...)
@@ -155,10 +167,10 @@ class BrowserEmailSender:
                 page.close()  # Close page but keep context
                 return True
             else:
-                # For ProtonMail with fallback authentication, allow preparation to succeed
+                # For providers with fallback authentication, allow preparation to succeed
                 # even if cookie validation fails, as long as we have password
                 password = sender_info.get('password', '')
-                if provider == 'protonmail' and password:
+                if provider in ['protonmail', 'yahoo'] and password:
                     self.logger.warning(f"Cookie validation failed for {email}, but password available for fallback")
                     page.close()
                     # Keep context for later use with password authentication
@@ -225,22 +237,69 @@ class BrowserEmailSender:
 
                 # Use content processing workflow if available
                 if hasattr(automation, 'compose_and_send_email_with_processing') and automation.content_processor:
-                    success = automation.compose_and_send_email_with_processing(
+                    result = automation.compose_and_send_email_with_processing(
                         page, recipient_email, sender_email, sender_info.get('password', '')
                     )
                 else:
                     # Fallback to basic workflow
-                    success = automation.compose_and_send_email(
+                    result = automation.compose_and_send_email(
                         page, recipient_email, subject, body_content, content_type,
                         sender_email, sender_info.get('password', '')
                     )
-                
-                if success:
+
+                # Handle context retry request
+                if result == "RETRY_FRESH_CONTEXT":
+                    self.logger.warning("🔄 Provider requested fresh browser context due to verification/rate limiting issues")
+                    self.logger.info(f"🧹 Closing current browser context for {sender_email}")
+
+                    # Close current page and context
+                    try:
+                        page.close()
+                        self.logger.debug("✅ Current page closed")
+                    except Exception as e:
+                        self.logger.debug(f"Page close failed: {e}")
+
+                    self.browser_handler.close_context(sender_email)
+                    self.logger.info("✅ Browser context closed")
+
+                    # Create fresh context with different browser type and retry
+                    self.logger.info("🆕 Creating fresh browser context with different browser type...")
+                    fresh_page = self.browser_handler.create_page(sender_email, force_browser_switch=True)
+                    if not fresh_page:
+                        self.logger.error("❌ Failed to create fresh browser context with different browser")
+                        return False
+
+                    current_browser_type = self.browser_handler.get_browser_type(sender_email)
+                    self.logger.info(f"✅ Fresh browser context created successfully using {current_browser_type}")
+
+                    # Retry with fresh context (only one retry attempt)
+                    self.logger.info("🔄 Attempting email send with fresh browser context...")
+                    if hasattr(automation, 'compose_and_send_email_with_processing') and automation.content_processor:
+                        retry_result = automation.compose_and_send_email_with_processing(
+                            fresh_page, recipient_email, sender_email, sender_info.get('password', '')
+                        )
+                    else:
+                        retry_result = automation.compose_and_send_email(
+                            fresh_page, recipient_email, subject, body_content, content_type,
+                            sender_email, sender_info.get('password', '')
+                        )
+
+                    if retry_result == "RETRY_FRESH_CONTEXT":
+                        self.logger.error("❌ Fresh context retry also failed - no more retries available")
+                        self.logger.error("💡 Suggestion: Try using a different email account or wait before retrying")
+                        return False
+
+                    result = retry_result
+
+                    if result:
+                        self.logger.info("✅ Email sent successfully after fresh context retry")
+
+                if result:
                     self.logger.info(f"✓ Email sent successfully from {sender_email} to {recipient_email}")
                 else:
                     self.logger.error(f"✗ Failed to send email from {sender_email} to {recipient_email}")
-                
-                return success
+
+                return result
                 
             except Exception as e:
                 self.logger.error(f"Error during email sending: {e}")

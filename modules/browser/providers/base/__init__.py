@@ -7,7 +7,7 @@
 # Project: BULK_MAILER - Enterprise Email Campaign Management System
 # Repository: https://github.com/krishna-kush/Bulk-Mailer
 #
-# Description: Email provider automation modules for browser-based email sending.
+# Description: Base classes for email provider implementations to eliminate code duplication
 #
 # License: MIT License
 # Created: 2025
@@ -17,7 +17,8 @@
 # For complete documentation, visit: https://github.com/krishna-kush/Bulk-Mailer
 # ================================================================================
 
-from .protonmail import ProtonMailAutomation
-from .yahoo import YahooAutomation
 
-__all__ = ['ProtonMailAutomation', 'YahooAutomation']
+from .authentication import BaseAuthentication
+from .email_composer import BaseEmailComposer
+
+__all__ = ['BaseAuthentication', 'BaseEmailComposer']
