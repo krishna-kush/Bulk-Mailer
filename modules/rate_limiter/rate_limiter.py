@@ -65,8 +65,8 @@ class RateLimiter:
                 'total_limit_per_run': sender.get('total_limit_per_run', 0),
                 'limit_per_min': sender.get('limit_per_min', 0),
                 'limit_per_hour': sender.get('limit_per_hour', 0),
-                'per_run_gap': sender.get('per_run_gap', 0),
-                'per_run_gap_randomizer': sender.get('per_run_gap_randomizer', 0)
+                'per_email_gap_sec': sender.get('per_email_gap_sec', 0),
+                'per_email_gap_sec_randomizer': sender.get('per_email_gap_sec_randomizer', 0)
             }
 
         return rate_limits
@@ -141,12 +141,12 @@ class RateLimiter:
             return True
 
         limits = self.rate_limits[sender_email]
-        per_run_gap = limits['per_run_gap']
+        per_email_gap_sec = limits['per_email_gap_sec']
 
-        if per_run_gap > 0:
+        if per_email_gap_sec > 0:
             time_since_last = current_time - self.last_sent_time[sender_email]
             # Use the randomized gap time if available, otherwise use base gap
-            required_gap = self.next_gap_time.get(sender_email, per_run_gap)
+            required_gap = self.next_gap_time.get(sender_email, per_email_gap_sec)
             return time_since_last >= required_gap
 
         return True
@@ -160,12 +160,12 @@ class RateLimiter:
             return 0.0
 
         limits = self.rate_limits[sender_email]
-        per_run_gap = limits['per_run_gap']
+        per_email_gap_sec = limits['per_email_gap_sec']
 
-        if per_run_gap > 0:
+        if per_email_gap_sec > 0:
             time_since_last = current_time - self.last_sent_time[sender_email]
             # Use the randomized gap time if available, otherwise use base gap
-            required_gap = self.next_gap_time.get(sender_email, per_run_gap)
+            required_gap = self.next_gap_time.get(sender_email, per_email_gap_sec)
             if time_since_last < required_gap:
                 return required_gap - time_since_last
 
@@ -209,8 +209,8 @@ class RateLimiter:
             return 0.0
 
         limits = self.rate_limits[sender_email]
-        base_gap = limits['per_run_gap']
-        randomizer = limits['per_run_gap_randomizer']
+        base_gap = limits['per_email_gap_sec']
+        randomizer = limits['per_email_gap_sec_randomizer']
 
         if base_gap <= 0:
             return 0.0
@@ -246,7 +246,7 @@ class RateLimiter:
             return 0.0
 
         limits = self.rate_limits[sender_email]
-        base_gap = limits['per_run_gap']
+        base_gap = limits['per_email_gap_sec']
 
         # For queue calculations, use the base gap time as the average
         # since randomization averages out to the base value over time

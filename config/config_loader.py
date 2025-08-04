@@ -255,8 +255,8 @@ class ConfigLoader:
                 total_limit_per_run = self.config.getint("SENDERS", f"{prefix}_total_limit_per_run", fallback=0)
                 limit_per_min = self.config.getint("SENDERS", f"{prefix}_limit_per_min", fallback=0)
                 limit_per_hour = self.config.getint("SENDERS", f"{prefix}_limit_per_hour", fallback=0)
-                per_run_gap = self.config.getint("SENDERS", f"{prefix}_per_run_gap", fallback=0)
-                per_run_gap_randomizer = self.config.getint("SENDERS", f"{prefix}_per_run_gap_randomizer", fallback=0)
+                per_email_gap_sec = self.config.getint("SENDERS", f"{prefix}_per_email_gap_sec", fallback=0)
+                per_email_gap_sec_randomizer = self.config.getint("SENDERS", f"{prefix}_per_email_gap_sec_randomizer", fallback=0)
 
                 # Convert relative cookie file path to absolute
                 if cookie_file and not os.path.isabs(cookie_file):
@@ -269,8 +269,8 @@ class ConfigLoader:
                     "total_limit_per_run": total_limit_per_run,
                     "limit_per_min": limit_per_min,
                     "limit_per_hour": limit_per_hour,
-                    "per_run_gap": per_run_gap,
-                    "per_run_gap_randomizer": per_run_gap_randomizer,
+                    "per_email_gap_sec": per_email_gap_sec,
+                    "per_email_gap_sec_randomizer": per_email_gap_sec_randomizer,
                     "provider": provider,
                     "cookie_file": cookie_file
                 })

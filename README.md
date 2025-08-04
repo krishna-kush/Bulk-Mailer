@@ -296,13 +296,13 @@ sender1_email = marketing@company.com
 sender1_password = app-specific-password
 sender1_smtp = gmail
 sender1_total_limit_per_run = 500
-sender1_per_run_gap = 5
+sender1_per_email_gap_sec = 5
 
 sender2_email = outreach@company.com
 sender2_password = app-specific-password
 sender2_smtp = outlook
 sender2_total_limit_per_run = 300
-sender2_per_run_gap = 8
+sender2_per_email_gap_sec = 8
 ```
 
 **Browser Automation Mode:**
@@ -315,13 +315,13 @@ sender1_email = your.email@proton.me
 sender1_provider = protonmail
 sender1_cookie_file = cookies/your.email@proton.me
 sender1_total_limit_per_run = 200
-sender1_per_run_gap = 10
+sender1_per_email_gap_sec = 10
 
 sender2_email = backup@proton.me
 sender2_provider = protonmail
 sender2_cookie_file = cookies/backup@proton.me
 sender2_total_limit_per_run = 150
-sender2_per_run_gap = 15
+sender2_per_email_gap_sec = 15
 ```
 
 #### 🌐 **Browser Automation Configuration**
